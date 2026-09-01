@@ -1,33 +1,42 @@
 @echo off
-chcp 65001 >nul
+rem Vazhno: tekst tolko latinicej. cmd.exe chitaet .bat pobajtno, i kirillica vnutri
+rem lomaet razbor strok (stroki nachinajut vypolnjatsja s serediny). Vse russkie
+rem podskazki - na samom sajte i v README.md.
 cd /d "%~dp0"
-title ПБА Gedeon Richter — сервер отчётов
 
 set "PY=C:\Users\Arena\AppData\Local\Python\pythoncore-3.12-64\python.exe"
 if not exist "%PY%" set "PY=python"
 
 if not exist ".venv\Scripts\python.exe" (
-  echo Первый запуск: создаю окружение, это займёт минуту...
-  "%PY%" -m venv .venv || goto :fail
+  echo First run: creating environment, takes about a minute...
+  "%PY%" -m venv .venv
+  if errorlevel 1 goto fail
 )
 
 .venv\Scripts\python.exe -c "import fastapi, uvicorn, openpyxl, httpx, anthropic, multipart, dotenv" 2>nul
 if errorlevel 1 (
-  echo Доустанавливаю библиотеки...
-  .venv\Scripts\python.exe -m pip install --disable-pip-version-check -q -r requirements.txt || goto :fail
+  echo Installing libraries...
+  .venv\Scripts\python.exe -m pip install --disable-pip-version-check -q -r requirements.txt
+  if errorlevel 1 goto fail
 )
 
 if not exist ".env" copy ".env.example" ".env" >nul
 
 echo.
-echo Сайт открывается по адресу http://127.0.0.1:8765
-echo Чтобы закрыть — просто закройте это окно.
+echo   PBA Gedeon Richter
+echo   Site: http://127.0.0.1:8765
+echo   Close this window when you are done.
 echo.
 start "" http://127.0.0.1:8765
 .venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8765
-goto :eof
+echo.
+echo Server stopped. If there is an error above, copy it and show it to Claude.
+pause
+goto end
 
 :fail
 echo.
-echo Не получилось подготовить окружение. Скопируйте текст выше и покажите Клоду.
+echo Setup failed. Copy the text above and show it to Claude.
 pause
+
+:end
