@@ -72,6 +72,17 @@ def _text_width(text: str, font: float) -> float:
     return len(text) * font * 0.58
 
 
+def _compact_num(value: float) -> str:
+    """«27 100» -> «27,1к». Промежуточная ступень: когда полные числа не влезают,
+    короткая запись лучше, чем выброшенные подписи."""
+    if value is None:
+        return "—"
+    if abs(value) < 1000:
+        return num(value, 0)
+    short = f"{value / 1000:.1f}".replace(".", ",").replace(",0", "")
+    return f"{short}к"
+
+
 def _month_labels(trend: list[dict]) -> list[str]:
     """Год подписываем только там, где он меняется: «Авг», «Сен», ..., «Янв ’26».
     Печатать год у каждого месяца — гарантированная каша на 12 столбиках."""
@@ -94,17 +105,30 @@ def bar_chart(
     if not trend:
         return '<p class="muted">Нет данных для графика.</p>'
 
-    pad_x, pad_top = 10, 36
+    pad_x = 10
+    pad_top = font + 11  # место под подписи значений над столбиками
     plot_w = width - pad_x * 2
     slot = plot_w / len(trend)
     bar_w = min(slot * 0.58, 58)
     max_v = max((p["volume"] for p in trend), default=0) or 1
 
     tick_font = max(9.0, min(float(font), slot * 0.30))
-    # Кегль значений подбираем под самое длинное число: сначала уменьшаем шрифт,
-    # и только если и на минимальном не влезает — оставляем пик и последний месяц.
-    widest_value = max(len(num(p["volume"], 0)) for p in trend) * 0.58
-    val_font = max(9.0, min(float(font), slot * 0.92 / widest_value))
+
+    # Подписи значений: полные числа -> компактные («27,1к») -> только пик и последний
+    # месяц. Кегль на каждой ступени подбирается под самое длинное число.
+    def _fit_labels(labels: list[str]) -> tuple[float, bool]:
+        widest = max(len(t) for t in labels) * 0.58
+        size = max(9.0, min(float(font), slot * 0.92 / widest))
+        return size, max(_text_width(t, size) for t in labels) <= slot * 0.94
+
+    full_labels = [num(p["volume"], 0) for p in trend]
+    val_font, fits = _fit_labels(full_labels)
+    value_labels = full_labels
+    if not fits:
+        compact_labels = [_compact_num(p["volume"]) for p in trend]
+        compact_font, compact_fits = _fit_labels(compact_labels)
+        if compact_fits:
+            value_labels, val_font, fits = compact_labels, compact_font, True
     # Запас снизу: один ряд подписей или два (см. stagger ниже) плюс возможная сноска.
     pad_bottom = 30 + tick_font * 2.2
     plot_h = height - pad_top - pad_bottom
@@ -116,8 +140,7 @@ def bar_chart(
     stagger = widest_tick > slot
     tick_step = 2 if stagger and widest_tick > slot * 2 else 1
 
-    value_labels = [num(p["volume"], 0) for p in trend]
-    show_all_values = max(_text_width(t, val_font) for t in value_labels) <= slot * 0.92
+    show_all_values = fits
     max_index = max(range(len(trend)), key=lambda i: trend[i]["volume"])
     key_indexes = {max_index, len(trend) - 1}
 
@@ -248,10 +271,11 @@ def _volume_bars(items: list[dict], kind: str) -> str:
 
 
 def _trend_grid(items: list[dict], kind: str) -> str:
+    """По одному графику на каждое ключевое слово — включая те, по которым Google не дал
+    разбивки по месяцам: вместо пропавшего графика показываем, что данных нет, иначе
+    непонятно, куда делся ключ."""
     charts = []
     for item in items:
-        if not item["trend"]:
-            continue
         color = (
             BRAND_COLOR
             if item["role"] == "brand"
@@ -259,13 +283,25 @@ def _trend_grid(items: list[dict], kind: str) -> str:
             if kind == "brands"
             else CATEGORY_COLOR
         )
-        charts.append(
-            '<div class="chart-block">'
-            f'<div class="chart-title"><span class="swatch" style="background:{color}"></span>'
-            f'{esc(item["label"])}</div>'
-            f"{bar_chart(item['trend'], color, width=660, height=270, font=15)}"
-            "</div>"
+        volume = (
+            f'<span class="chart-volume">{num(item["volume"], 0)} / мес</span>'
+            if item["volume"] is not None
+            else '<span class="chart-volume muted">нет данных</span>'
         )
+        title = (
+            f'<div class="chart-title"><span class="swatch" style="background:{color}"></span>'
+            f'<span class="chart-name">{esc(item["label"])}</span>{volume}</div>'
+        )
+        if item["trend"]:
+            body = bar_chart(item["trend"], color, width=600, height=190, font=13)
+        else:
+            reason = f' ({esc(item["error"])})' if item["error"] else ""
+            body = (
+                '<p class="muted small chart-empty">Google не дал разбивку по месяцам'
+                f"{reason}.</p>"
+            )
+        charts.append(f'<div class="chart-block">{title}{body}</div>')
+
     if not charts:
         return ""
     return f'<div class="charts-grid">{"".join(charts)}</div>'
@@ -772,8 +808,8 @@ CSS = """
   .pos { color: var(--pos); }
   .date-range { color: var(--text-muted); font-weight: 400; font-size: 13px; }
   .week-block { margin-bottom: 20px; }
-  .chart-block { margin-top: 22px; }
-  .chart-title { font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+  .chart-block { margin-top: 12px; }
+  .chart-title { font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 8px; margin-bottom: 2px; }
   .viz-svg { width: 100%; height: auto; display: block; overflow: visible; }
   .viz-axis { stroke: var(--axis); stroke-width: 1.5; }
   .viz-tick { fill: var(--text-secondary); font-size: 13px; }
@@ -840,8 +876,16 @@ CSS = """
     background: color-mix(in srgb, var(--bar-fact) 18%, transparent); color: var(--bar-fact);
   }
   .charts-grid {
-    display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr));
-    gap: 10px 26px; margin-top: 18px;
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+    gap: 4px 26px; margin-top: 14px;
+  }
+  .chart-volume {
+    margin-left: auto; font-size: 12.5px; font-weight: 700; font-variant-numeric: tabular-nums;
+    color: var(--text-secondary); white-space: nowrap;
+  }
+  .chart-name { overflow-wrap: anywhere; }
+  .chart-empty {
+    border: 1px dashed var(--border); border-radius: 8px; padding: 14px; margin: 4px 0 12px;
   }
   @media print {
     .toolbar { display: none; }
