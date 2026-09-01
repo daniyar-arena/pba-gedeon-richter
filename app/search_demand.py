@@ -123,10 +123,76 @@ async def _fetch_one(client: httpx.AsyncClient, token: str, keyword: str, geo_id
     return result
 
 
+BRAND_ROLES = ("brand", "competitor")
+
+
+def _groups(items: list[dict]) -> dict:
+    """Два блока: «бренд и конкуренты» (доля голоса в поиске) и «категория»
+    (объём широких запросов и доля бренда в нём).
+
+    Доли считаются только по тем ключам, где Google реально отдал объём: если по
+    конкуренту данных нет, он не превращается в ноль и не завышает нашу долю —
+    вместо этого блок помечает, что расчёт неполный.
+    """
+    brands = [i for i in items if i["role"] in BRAND_ROLES]
+    category = [i for i in items if i["role"] == "category"]
+    ours = next((i for i in brands if i["role"] == "brand" and i["volume"] is not None), None)
+
+    brands_measured = [i for i in brands if i["volume"] is not None]
+    brands_total = sum(i["volume"] for i in brands_measured)
+    for item in brands:
+        item["share"] = (item["volume"] / brands_total) if (brands_total and item["volume"]) else None
+    ranked = sorted(brands_measured, key=lambda i: -i["volume"])
+    for place, item in enumerate(ranked, start=1):
+        item["rank"] = place
+
+    category_measured = [i for i in category if i["volume"] is not None]
+    category_total = sum(i["volume"] for i in category_measured)
+    for item in category:
+        item["share"] = (
+            (item["volume"] / category_total) if (category_total and item["volume"]) else None
+        )
+
+    brand_in_category = None
+    if ours and category_total:
+        ratio = ours["volume"] / category_total
+        brand_in_category = {
+            "brand": ours["label"],
+            "brand_volume": ours["volume"],
+            "category_volume": category_total,
+            "ratio": ratio,
+            # Больше 1 бывает: бренд ищут чаще, чем категорию словами. Показываем «×»,
+            # а не процент больше 100, который читался бы как опечатка.
+            "display": f"{ratio:.1f}×" if ratio >= 1 else f"{ratio * 100:.1f}%",
+        }
+
+    return {
+        "brands": {
+            "items": brands,
+            "total_volume": brands_total or None,
+            "measured": len(brands_measured),
+            "missing": len(brands) - len(brands_measured),
+            "ours": ours["label"] if ours else None,
+            "our_rank": ours.get("rank") if ours else None,
+            "our_share": ours.get("share") if ours else None,
+        },
+        "category": {
+            "items": category,
+            "total_volume": category_total or None,
+            "measured": len(category_measured),
+            "missing": len(category) - len(category_measured),
+        },
+        "brand_in_category": brand_in_category,
+    }
+
 async def fetch_google_demand(
     keywords: list[dict], geo: str, apify_token: str | None
 ) -> dict:
-    """keywords: [{'keyword': 'стопдиар', 'label': 'Стопдиар (бренд)', 'role': 'brand'}]
+    """keywords: [{'keyword': 'гроприносин', 'label': 'Гроприносин', 'role': 'brand'}]
+
+    Роли: brand — наш бренд, competitor — бренд конкурента, category — широкий запрос
+    категории, other — всё остальное. Роли задают два блока отчёта: доля голоса среди
+    брендов и объём спроса в категории.
 
     Возвращает {'source', 'geo', 'available', 'note', 'items': [...]} — items в том же
     порядке, что и на входе, с volume=None там, где данных нет.
@@ -182,16 +248,5 @@ async def fetch_google_demand(
     elif any(i["error"] for i in items):
         base["note"] = "По части ключевых слов данных нет — они помечены отдельно."
 
-    brand = next((i for i in items if i["role"] == "brand" and i["volume"]), None)
-    category = next((i for i in items if i["role"] == "category" and i["volume"]), None)
-    if brand and category:
-        ratio = brand["volume"] / category["volume"]
-        base["brand_vs_category"] = {
-            "brand": brand["label"],
-            "category": category["label"],
-            "ratio": ratio,
-            # >1 бывает: бренд ищут чаще, чем категорию словами. Показываем как «×», а не
-            # процент больше 100, который читался бы как опечатка.
-            "display": f"{ratio:.1f}×" if ratio >= 1 else f"{ratio * 100:.1f}%",
-        }
+    base["groups"] = _groups(items)
     return base

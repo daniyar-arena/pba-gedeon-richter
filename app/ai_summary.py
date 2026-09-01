@@ -67,7 +67,11 @@ SUMMARY_TOOL = {
             },
             "search_demand_comment": {
                 "type": "string",
-                "description": "Комментарий по спросу из Google. Если данных нет — так и написать.",
+                "description": (
+                    "2-4 предложения по спросу: сначала наш бренд против конкурентов "
+                    "(доля голоса, место), затем спрос в категории и доля бренда в ней. "
+                    "Если данных нет — так и написать, без выводов."
+                ),
             },
             "recommendations": {
                 "type": "array",
@@ -94,6 +98,12 @@ SYSTEM_PROMPT = """Ты медиа-аналитик агентства Arena Med
 5. Данные Google Keyword Planner по кириллическим запросам подводили раньше (бренд
    показывался больше категории). Если соотношение выглядит подозрительно, отметь это
    как «требует проверки по Wordstat», а не как факт о рынке.
+5а. Блок search_demand.groups.brands — наш бренд и конкуренты: доля голоса в поиске
+   (our_share), место (our_rank) и объёмы. Доля считается только по ключам, где Google
+   дал объём: если groups.brands.missing > 0, скажи, что расстановка неполная, и не
+   выдавай долю за точную. Это спрос в Google, а не доля рынка — так и называй.
+5б. Блок search_demand.groups.category — широкие запросы категории и доля бренда в
+   ней (brand_in_category). Прокомментируй и сезонность по trend, если она видна.
 6. К каждой динамике давай причину или гипотезу с числом, а не только констатацию.
 7. Язык — живой рабочий русский, как пишет медиапланер коллеге. Без канцелярита,
    без «в рамках», «осуществляется», «наблюдается положительная динамика».
@@ -126,7 +136,7 @@ def _prompt_payload(month: dict, demand: dict, client: str, brand: str) -> dict:
             "source": demand.get("source"),
             "geo": demand.get("geo"),
             "note": demand.get("note"),
-            "brand_vs_category": demand.get("brand_vs_category"),
+            "groups": demand.get("groups"),
             "items": [
                 {
                     "label": i["label"],
@@ -248,15 +258,28 @@ def _fallback(month: dict, demand: dict, reason: str) -> dict:
         )
 
     if demand.get("available"):
-        parts = [
-            f"{i['label']}: {_n(i['volume'])} запросов/мес"
-            for i in demand["items"]
-            if i["volume"] is not None
+        groups = demand.get("groups") or {}
+        brands = groups.get("brands") or {}
+        category = groups.get("category") or {}
+        parts = []
+        if brands.get("our_share"):
+            parts.append(
+                f"{brands['ours']}: {brands['our_share'] * 100:.0f}% брендовых запросов блока"
+                f" (место {brands['our_rank']} из {brands['measured']})"
+            )
+        parts += [
+            f"{i['label']}: {_n(i['volume'])}"
+            for i in brands.get("items", [])
+            if i["volume"] is not None and i["role"] != "brand"
         ]
-        demand_comment = "; ".join(parts) or "нет данных"
-        ratio = demand.get("brand_vs_category")
+        if category.get("total_volume"):
+            parts.append(f"категория: {_n(category['total_volume'])} запросов/мес")
+        ratio = groups.get("brand_in_category")
         if ratio:
-            demand_comment += f". Бренд к категории — {ratio['display']}"
+            parts.append(f"бренд к категории — {ratio['display']}")
+        if brands.get("missing"):
+            parts.append(f"без данных ключей: {brands['missing']}")
+        demand_comment = "; ".join(parts) or "нет данных"
     else:
         demand_comment = demand.get("note") or "Данных по спросу нет."
 

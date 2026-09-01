@@ -12,6 +12,7 @@ from html import escape
 BRAND_COLOR = "#1f6feb"
 CATEGORY_COLOR = "#8a6d3b"
 OTHER_COLOR = "#5b6b7a"
+RIVAL_COLOR = "#7c8b9c"
 
 SEVERITY_LABEL = {"ok": "в норме", "watch": "на контроле", "risk": "требует решения"}
 
@@ -65,12 +66,13 @@ def esc(value) -> str:
 
 # ---------- графики ----------
 
-def bar_chart(trend: list[dict], color: str) -> str:
+def bar_chart(
+    trend: list[dict], color: str, width: int = 760, height: int = 260, font: int = 13
+) -> str:
     """Столбики по месяцам. Крупные подписи и толстые бары — отчёт смотрят на встрече."""
     if not trend:
         return '<p class="muted">Нет данных для графика.</p>'
 
-    width, height = 760, 260
     pad_left, pad_right, pad_top, pad_bottom = 8, 8, 34, 44
     plot_w = width - pad_left - pad_right
     plot_h = height - pad_top - pad_bottom
@@ -95,11 +97,11 @@ def bar_chart(trend: list[dict], color: str) -> str:
         )
         labels.append(
             f'<text class="viz-tick" x="{x + bar_w / 2:.1f}" y="{pad_top + plot_h + 26:.0f}" '
-            f'text-anchor="middle">{month_label}</text>'
+            f'text-anchor="middle" style="font-size:{font}px">{month_label}</text>'
         )
         values.append(
             f'<text class="viz-value" x="{x + bar_w / 2:.1f}" y="{y - 8:.1f}" '
-            f'text-anchor="middle">{num(point["volume"], 0)}</text>'
+            f'text-anchor="middle" style="font-size:{font}px">{num(point["volume"], 0)}</text>'
         )
 
     baseline = (
@@ -143,69 +145,193 @@ def render_ai(ai: dict) -> str:
     </section>'''
 
 
-def render_demand(demand: dict) -> str:
-    if not demand.get("items"):
-        return f'''
-    <section class="card section">
-      <h2>Спрос по ключевым словам</h2>
-      <p class="muted">{esc(demand.get("note") or "Блок не запрашивался.")}</p>
-    </section>'''
+def _demand_note(block: dict, what: str) -> str:
+    """Если по части ключей Google молчит, доли считаются не по всем — говорим об этом
+    прямо, иначе доля выглядит точнее, чем есть."""
+    if not block["missing"]:
+        return ""
+    total = block["missing"] + block["measured"]
+    return (
+        f'<p class="footer-note">Доли посчитаны по {block["measured"]} из {total} '
+        f"{what}: по остальным Google не дал объёмов, они помечены в списке.</p>"
+    )
 
-    tiles, charts = [], []
-    for item in demand["items"]:
+
+def _volume_bars(items: list[dict], kind: str) -> str:
+    """Один бар на ключевое слово: объём запросов и доля внутри блока."""
+    measured = [i for i in items if i["volume"] is not None]
+    max_v = max((i["volume"] for i in measured), default=0) or 1
+
+    lines = []
+    for item in items:
+        if item["role"] == "brand":
+            bar_class, mark = "ours", '<span class="bar-mark">наш бренд</span>'
+        elif kind == "brands":
+            bar_class, mark = "rival", ""
+        else:
+            bar_class, mark = "cat", ""
+
+        if item["volume"] is None:
+            bar_html = '<div class="bar-hold"></div><span class="bar-tag warn">нет данных</span>'
+            share_html = f'<span class="bar-share">{esc(item["error"] or "источник не ответил")}</span>'
+        else:
+            bar_html = (
+                f'<div class="bar-hold"><div class="bar {bar_class}" '
+                f'style="width:{item["volume"] / max_v * 100:.1f}%"></div></div>'
+                f'<span class="bar-tag">{num(item["volume"], 0)}</span>'
+            )
+            share = item.get("share")
+            share_html = (
+                f'<span class="bar-share">{share * 100:.0f}% блока</span>' if share else ""
+            )
+
+        lines.append(
+            '<div class="bar-row">'
+            '<div class="bar-label">'
+            f'<span class="bar-platform">{esc(item["label"])}</span>'
+            f'<span class="bar-format">«{esc(item["keyword"])}»{mark}</span>'
+            "</div>"
+            f'<div class="bar-pair"><div class="bar-line">{bar_html}</div></div>'
+            f'<div class="bar-delta">{share_html}</div>'
+            "</div>"
+        )
+    return f'<div class="bars">{"".join(lines)}</div>'
+
+
+def _trend_grid(items: list[dict], kind: str) -> str:
+    charts = []
+    for item in items:
+        if not item["trend"]:
+            continue
         color = (
             BRAND_COLOR
             if item["role"] == "brand"
+            else RIVAL_COLOR
+            if kind == "brands"
             else CATEGORY_COLOR
-            if item["role"] == "category"
-            else OTHER_COLOR
         )
-        if item["volume"] is None:
-            value_html = '<div class="value muted">нет данных</div>'
-            delta_html = f'<div class="delta">{esc(item["error"] or "источник не ответил")}</div>'
-        else:
-            value_html = f'<div class="value">{num(item["volume"], 0)}</div>'
-            delta_html = '<div class="delta">запросов в месяц</div>'
-        tiles.append(
-            f'''<div class="stat-tile">
-                  <div class="label"><span class="swatch" style="background:{color}"></span>{esc(item["label"])}</div>
-                  {value_html}{delta_html}
-                </div>'''
+        charts.append(
+            '<div class="chart-block">'
+            f'<div class="chart-title"><span class="swatch" style="background:{color}"></span>'
+            f'{esc(item["label"])}</div>'
+            f"{bar_chart(item['trend'], color, width=430, height=230, font=15)}"
+            "</div>"
         )
-        if item["trend"]:
-            charts.append(
-                f'''<div class="chart-block">
-                      <div class="chart-title"><span class="swatch" style="background:{color}"></span>
-                        {esc(item["label"])} — «{esc(item["keyword"])}»</div>
-                      {bar_chart(item["trend"], color)}
-                    </div>'''
-            )
+    if not charts:
+        return ""
+    return f'<div class="charts-grid">{"".join(charts)}</div>'
 
-    ratio = demand.get("brand_vs_category")
-    ratio_tile = (
-        f'''<div class="stat-tile">
-              <div class="label">Бренд к категории</div>
-              <div class="value">{esc(ratio["display"])}</div>
-              <div class="delta">{esc(ratio["brand"])} к {esc(ratio["category"])}</div>
-            </div>'''
-        if ratio
+
+def _demand_header(demand: dict, title: str) -> str:
+    return (
+        '<div class="section-head">'
+        f"<h2>{title}</h2>"
+        '<span class="status-badge"><span class="status-dot live"></span>'
+        f'{esc(demand.get("source"))}, гео: {esc(demand.get("geo"))}</span>'
+        "</div>"
+    )
+
+
+def _brands_section(demand: dict, block: dict) -> str:
+    if not block["items"]:
+        return ""
+    rank_tile = ""
+    if block["our_rank"] and block["measured"] > 1:
+        rank_tile = (
+            '<div class="stat-tile"><div class="label">Место по объёму запросов</div>'
+            f'<div class="value">{block["our_rank"]} из {block["measured"]}</div>'
+            '<div class="delta">среди брендов с данными</div></div>'
+        )
+    share_tile = ""
+    if block["our_share"]:
+        share_tile = (
+            '<div class="stat-tile"><div class="label">Доля голоса в поиске</div>'
+            f'<div class="value">{block["our_share"] * 100:.0f}%</div>'
+            f'<div class="delta">{esc(block["ours"])} от всех брендовых запросов блока</div></div>'
+        )
+    total_tile = (
+        '<div class="stat-tile"><div class="label">Всего брендовых запросов</div>'
+        f'<div class="value">{num(block["total_volume"], 0)}</div>'
+        '<div class="delta">в месяц, бренд + конкуренты</div></div>'
+        if block["total_volume"]
         else ""
     )
-    note = f'<div class="callout warn">{esc(demand["note"])}</div>' if demand.get("note") else ""
 
-    return f'''
-    <section class="card section">
-      <div class="section-head">
-        <h2>Спрос по ключевым словам</h2>
-        <span class="status-badge"><span class="status-dot live"></span>{esc(demand.get("source"))}, гео: {esc(demand.get("geo"))}</span>
-      </div>
-      {note}
-      <div class="stats-row">{"".join(tiles)}{ratio_tile}</div>
-      {"".join(charts)}
-      <p class="footer-note">Хвост последних месяцев обрезается, если Google отдал по ним нули:
-      это отчётная задержка источника, а не падение спроса. Данные Keyword Planner
-      по кириллическим запросам стоит перепроверять по Wordstat.</p>
-    </section>'''
+    return (
+        '<section class="card section">'
+        + _demand_header(demand, "Бренд и конкуренты в поиске")
+        + f'<div class="stats-row">{share_tile}{rank_tile}{total_tile}</div>'
+        + _volume_bars(block["items"], "brands")
+        + _demand_note(block, "брендов")
+        + _trend_grid(block["items"], "brands")
+        + "</section>"
+    )
+
+
+def _category_section(demand: dict, block: dict, brand_in_category: dict | None) -> str:
+    if not block["items"]:
+        return ""
+    total_tile = (
+        '<div class="stat-tile"><div class="label">Спрос в категории</div>'
+        f'<div class="value">{num(block["total_volume"], 0)}</div>'
+        f'<div class="delta">запросов в месяц по {block["measured"]} широким ключам</div></div>'
+        if block["total_volume"]
+        else ""
+    )
+    ratio_tile = (
+        '<div class="stat-tile"><div class="label">Бренд к категории</div>'
+        f'<div class="value">{esc(brand_in_category["display"])}</div>'
+        f'<div class="delta">{esc(brand_in_category["brand"])}: '
+        f'{num(brand_in_category["brand_volume"], 0)} к {num(brand_in_category["category_volume"], 0)}</div></div>'
+        if brand_in_category
+        else ""
+    )
+
+    return (
+        '<section class="card section">'
+        + _demand_header(demand, "Спрос в категории")
+        + f'<div class="stats-row">{total_tile}{ratio_tile}</div>'
+        + _volume_bars(block["items"], "category")
+        + _demand_note(block, "запросов категории")
+        + _trend_grid(block["items"], "category")
+        + "</section>"
+    )
+
+
+def render_demand(demand: dict) -> str:
+    if not demand.get("items"):
+        return (
+            '<section class="card section"><h2>Спрос по ключевым словам</h2>'
+            f'<p class="muted">{esc(demand.get("note") or "Блок не запрашивался.")}</p></section>'
+        )
+
+    groups = demand.get("groups") or {}
+    brands = groups.get("brands", {"items": [], "missing": 0, "measured": 0})
+    category = groups.get("category", {"items": [], "missing": 0, "measured": 0})
+    others = [i for i in demand["items"] if i["role"] not in ("brand", "competitor", "category")]
+
+    note = f'<div class="callout warn">{esc(demand["note"])}</div>' if demand.get("note") else ""
+    sections = [
+        _brands_section(demand, brands),
+        _category_section(demand, category, groups.get("brand_in_category")),
+    ]
+    if others:
+        sections.append(
+            '<section class="card section">'
+            + _demand_header(demand, "Другие запросы")
+            + _volume_bars(others, "other")
+            + _trend_grid(others, "other")
+            + "</section>"
+        )
+
+    body = "".join(s for s in sections if s)
+    disclaimer = (
+        '<p class="footer-note">Источник — Google Keyword Planner: показывает спрос в Google,'
+        " не весь рынок. Хвост последних месяцев обрезается, если Google отдал по ним нули"
+        " (отчётная задержка, а не падение спроса). По кириллическим запросам Keyword Planner"
+        " уже путал объёмы бренда и категории — расстановку сил стоит перепроверять по Wordstat.</p>"
+    )
+    return note + body + disclaimer
 
 
 def _delta_badge(value, threshold: float = 0.02) -> str:
@@ -414,6 +540,27 @@ def render_pba(month: dict) -> str:
         "" if delivery is None or abs(delivery - 1) <= 0.02 else ("neg" if delivery < 1 else "pos")
     )
 
+    if month["pending_week_numbers"]:
+        callout_text = (
+            f"Закрыты (есть факт): <strong>недели {esc(closed)}</strong>. "
+            f"Не завершены или не отчитаны: <strong>недели {esc(pending)}</strong> — "
+            "по ним показан только план. Процент от плана по месяцу целиком сейчас ничего "
+            "не говорит: часть бюджета просто ещё не наступила. Реальный темп — "
+            "по закрытым неделям."
+        )
+        pending_tile = (
+            '<div class="stat-tile"><div class="label">Осталось по плану</div>'
+            f'<div class="value">{money(s["plan_pending"])}</div>'
+            f'<div class="delta">недели {esc(pending)}</div></div>'
+        )
+    else:
+        callout_text = (
+            f"Месяц отчитан полностью: закрыты все {s['total_weeks']} "
+            f"{weeks_word(s['total_weeks'])}, факт есть по каждой. "
+            "Выполнение ниже — по всему месяцу."
+        )
+        pending_tile = ""
+
     weeks_html = "".join(
         _week_table(w, w["week_number"] in month["closed_week_numbers"]) for w in month["weeks"]
     )
@@ -422,12 +569,7 @@ def render_pba(month: dict) -> str:
     return f'''
     <section class="card section">
       <div class="section-head"><h2>ПБА — {esc(month["label"])}</h2></div>
-      <div class="callout">
-        Закрыты (есть факт): <strong>недели {esc(closed)}</strong>.
-        Не завершены или не отчитаны: <strong>недели {esc(pending)}</strong> — по ним показан только план.
-        Процент от плана по месяцу целиком сейчас ничего не говорит: часть бюджета просто
-        ещё не наступила. Реальный темп — по закрытым неделям.
-      </div>
+      <div class="callout">{callout_text}</div>
       <div class="stats-row">
         <div class="stat-tile">
           <div class="label">План на месяц</div>
@@ -444,11 +586,7 @@ def render_pba(month: dict) -> str:
           <div class="value {delivery_class}">{"—" if delivery is None else f"{delivery * 100:.1f}%"}</div>
           <div class="delta">{s["closed_weeks"]} из {s["total_weeks"]} недель</div>
         </div>
-        <div class="stat-tile">
-          <div class="label">Осталось по плану</div>
-          <div class="value">{money(s["plan_pending"])}</div>
-          <div class="delta">недели {esc(pending)}</div>
-        </div>
+        {pending_tile}
       </div>
 
       <div class="sub-head">Сводно по площадкам — только закрытые недели</div>
@@ -479,6 +617,8 @@ CSS = """
     --neg: #d02b2b;
     --bar-plan: #ccd8e8;
     --bar-fact: #1f6feb;
+    --bar-rival: #8b9aab;
+    --bar-cat: #a3813f;
     --warn-text: #a86500;
   }
   @media (prefers-color-scheme: dark) {
@@ -496,6 +636,8 @@ CSS = """
       --neg: #ff6b6b;
       --bar-plan: #313f57;
       --bar-fact: #5a9bff;
+      --bar-rival: #7b8798;
+      --bar-cat: #c19a55;
       --warn-text: #f0b24a;
     }
   }
@@ -638,6 +780,18 @@ CSS = """
   @media (max-width: 720px) {
     .bar-row { grid-template-columns: 1fr; gap: 6px; }
     .bar-delta { align-items: flex-start; flex-direction: row; gap: 10px; }
+  }
+  .bar.ours { background: var(--bar-fact); }
+  .bar.rival { background: var(--bar-rival); }
+  .bar.cat { background: var(--bar-cat); }
+  .bar-mark {
+    margin-left: 8px; padding: 1px 6px; border-radius: 5px; font-size: 10px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.03em;
+    background: color-mix(in srgb, var(--bar-fact) 18%, transparent); color: var(--bar-fact);
+  }
+  .charts-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr));
+    gap: 10px 26px; margin-top: 18px;
   }
   @media print {
     .toolbar { display: none; }
