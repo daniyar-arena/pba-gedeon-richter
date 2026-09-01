@@ -208,43 +208,128 @@ def render_demand(demand: dict) -> str:
     </section>'''
 
 
-def _placement_table(rows: list[dict]) -> str:
+def _delta_badge(value, threshold: float = 0.02) -> str:
+    """Отклонение бейджем: в пределах ±2% — серый (норма размещения), дальше цветной."""
+    if value is None:
+        return '<span class="badge flat">—</span>'
+    cls = pct_class(value, threshold) or "flat"
+    return f'<span class="badge {cls}">{pct(value)}</span>'
+
+
+def _placement_bars(rows: list[dict], total_fact: float) -> str:
+    """Горизонтальные бары «план vs факт» по бюджету. Структура расхода и промахи
+    видны раньше, чем читаются цифры — таблица ниже нужна для точных значений."""
+    max_v = max(max(r["budget_plan"] or 0, r["budget_fact"] or 0) for r in rows) or 1
+
+    lines = []
+    for r in rows:
+        plan = r["budget_plan"] or 0
+        fact = r["budget_fact"] or 0
+        not_started = plan > 0 and fact == 0
+        share = fact / total_fact if total_fact else None
+
+        if not_started:
+            fact_line = (
+                '<div class="bar-line"><div class="bar-hold"></div>'
+                '<span class="bar-tag warn">не стартовало</span></div>'
+            )
+        else:
+            fact_line = (
+                f'<div class="bar-line"><div class="bar-hold">'
+                f'<div class="bar fact" style="width:{fact / max_v * 100:.1f}%"></div></div>'
+                f'<span class="bar-tag">{money(fact)}</span></div>'
+            )
+
+        share_html = f'<span class="bar-share">доля {share * 100:.0f}%</span>' if share else ""
+        lines.append(
+            '<div class="bar-row">'
+            '<div class="bar-label">'
+            f'<span class="bar-platform">{esc(r["platform"])}</span>'
+            f'<span class="bar-format">{esc(r["format"])} &middot; {esc(r["buy_model"])}</span>'
+            "</div>"
+            '<div class="bar-pair">'
+            '<div class="bar-line"><div class="bar-hold">'
+            f'<div class="bar plan" style="width:{plan / max_v * 100:.1f}%"></div></div>'
+            f'<span class="bar-tag muted">{money(plan)}</span></div>'
+            f"{fact_line}"
+            "</div>"
+            f'<div class="bar-delta">{_delta_badge(r["budget_pct"])}{share_html}</div>'
+            "</div>"
+        )
+
+    legend = (
+        '<div class="bars-legend">'
+        '<span class="key plan"></span>план'
+        '<span class="key fact"></span>факт'
+        '<span class="muted small">бюджет с НДС и АК, длина бара — доля от самой '
+        "крупной площадки</span></div>"
+    )
+    return legend + f'<div class="bars">{"".join(lines)}</div>'
+
+
+def _placement_table(rows: list[dict], total_plan: float, total_fact: float) -> str:
+    """Компактная таблица: план уже виден на барах, здесь факт, доля и отклонения."""
     body = []
     for r in rows:
+        plan = r["budget_plan"] or 0
+        fact = r["budget_fact"] or 0
+        share = fact / total_fact if total_fact else None
+        if plan > 0 and fact == 0:
+            budget_cell = '<td class="num warn-text">не стартовало</td><td class="num muted">—</td>'
+        else:
+            share_text = f"{share * 100:.0f}%" if share else "—"
+            budget_cell = (
+                f'<td class="num">{money(fact)}</td>'
+                f'<td class="num muted">{share_text}</td>'
+            )
         body.append(
-            f'''<tr>
-              <td>{esc(r["platform"])}</td>
-              <td>{esc(r["format"])}</td>
-              <td class="muted">{esc(r["buy_model"])}</td>
-              <td class="num">{num(r["kpi_plan"])}</td>
-              <td class="num">{num(r["kpi_fact"])}</td>
-              <td class="num {pct_class(r["kpi_pct"])}">{pct(r["kpi_pct"])}</td>
-              <td class="num">{money(r["budget_plan"])}</td>
-              <td class="num">{money(r["budget_fact"])}</td>
-              <td class="num {pct_class(r["budget_pct"])}">{pct(r["budget_pct"])}</td>
-              <td class="num">{num(r["unit_cost_plan"], 2)}</td>
-              <td class="num">{num(r["unit_cost_fact"], 2)}</td>
-              <td class="num {pct_class(r["unit_cost_pct"])}">{pct(r["unit_cost_pct"])}</td>
-            </tr>'''
+            "<tr>"
+            f'<td><span class="cell-main">{esc(r["platform"])}</span>'
+            f'<span class="cell-sub">{esc(r["format"])}</span></td>'
+            f'<td class="muted">{esc(r["buy_model"])}</td>'
+            f"{budget_cell}"
+            f'<td class="num">{_delta_badge(r["budget_pct"])}</td>'
+            f'<td class="num">{num(r["kpi_fact"])}</td>'
+            f'<td class="num">{_delta_badge(r["kpi_pct"])}</td>'
+            f'<td class="num">{num(r["unit_cost_fact"], 2)}</td>'
+            f'<td class="num">{_delta_badge(r["unit_cost_pct"])}</td>'
+            "</tr>"
         )
-    return f'''
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th rowspan="2">Платформа</th><th rowspan="2">Формат</th><th rowspan="2">Закупка</th>
-              <th colspan="3">KPI</th><th colspan="3">Бюджет с НДС и АК</th>
-              <th colspan="3">Цена единицы</th>
-            </tr>
-            <tr>
-              <th class="num">план</th><th class="num">факт</th><th class="num">%</th>
-              <th class="num">план</th><th class="num">факт</th><th class="num">%</th>
-              <th class="num">план</th><th class="num">факт</th><th class="num">%</th>
-            </tr>
-          </thead>
-          <tbody>{"".join(body)}</tbody>
-        </table>
-      </div>'''
+
+    total_pct = (total_fact - total_plan) / total_plan if total_plan else None
+    total_row = (
+        '<tr class="total-row"><td colspan="2">Всего по закрытым неделям</td>'
+        f'<td class="num">{money(total_fact)}</td><td class="num muted">100%</td>'
+        f'<td class="num">{_delta_badge(total_pct)}</td>'
+        '<td class="num muted">—</td><td class="num muted">—</td>'
+        '<td class="num muted">—</td><td class="num muted">—</td></tr>'
+    )
+
+    # Двухъярусная шапка: иначе три колонки «к плану» подряд читаются неоднозначно.
+    head = (
+        "<thead>"
+        '<tr><th rowspan="2">Площадка</th><th rowspan="2">Закупка</th>'
+        '<th colspan="3">Бюджет с НДС и АК</th>'
+        '<th colspan="2">KPI</th>'
+        '<th colspan="2">Цена единицы</th></tr>'
+        '<tr><th class="num">факт</th><th class="num">доля</th><th class="num">к плану</th>'
+        '<th class="num">факт</th><th class="num">к плану</th>'
+        '<th class="num">факт</th><th class="num">к плану</th></tr>'
+        "</thead>"
+    )
+    return (
+        '<div class="table-wrap"><table class="compact">'
+        f'{head}<tbody>{"".join(body)}{total_row}</tbody>'
+        "</table></div>"
+    )
+
+
+def render_placements(rows: list[dict]) -> str:
+    if not rows:
+        return '<p class="muted">Закрытых недель нет — сводить факт по площадкам пока не на чем.</p>'
+    total_plan = sum(r["budget_plan"] or 0 for r in rows)
+    total_fact = sum(r["budget_fact"] or 0 for r in rows)
+    return _placement_bars(rows, total_fact) + _placement_table(rows, total_plan, total_fact)
 
 
 def _week_table(week: dict, is_closed: bool) -> str:
@@ -332,11 +417,7 @@ def render_pba(month: dict) -> str:
     weeks_html = "".join(
         _week_table(w, w["week_number"] in month["closed_week_numbers"]) for w in month["weeks"]
     )
-    placement_html = (
-        _placement_table(month["by_placement_closed"])
-        if month["by_placement_closed"]
-        else '<p class="muted">Закрытых недель нет — сводить факт по площадкам пока не на чем.</p>'
-    )
+    placement_html = render_placements(month["by_placement_closed"])
 
     return f'''
     <section class="card section">
@@ -396,6 +477,9 @@ CSS = """
     --border: rgba(11,11,11,0.10);
     --pos: #0ca30c;
     --neg: #d02b2b;
+    --bar-plan: #ccd8e8;
+    --bar-fact: #1f6feb;
+    --warn-text: #a86500;
   }
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
@@ -410,6 +494,9 @@ CSS = """
       --border: rgba(255,255,255,0.10);
       --pos: #45c745;
       --neg: #ff6b6b;
+      --bar-plan: #313f57;
+      --bar-fact: #5a9bff;
+      --warn-text: #f0b24a;
     }
   }
   * { box-sizing: border-box; }
@@ -419,6 +506,8 @@ CSS = """
     font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
     background: var(--page);
     color: var(--text-primary);
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
   }
   .wrap { max-width: 1180px; margin: 0 auto; }
   h1 { font-size: 26px; margin: 0 0 6px; }
@@ -508,6 +597,48 @@ CSS = """
     text-decoration: none; cursor: pointer;
   }
   .btn.primary { background: #1f6feb; border-color: #1f6feb; color: #fff; }
+
+  /* Сводка по площадкам: бары «план vs факт» + компактная таблица под ними */
+  .bars-legend {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    font-size: 12px; color: var(--text-secondary); margin: 6px 0 16px;
+  }
+  .key { width: 15px; height: 10px; border-radius: 3px; display: inline-block; }
+  .key.plan { background: var(--bar-plan); }
+  .key.fact { background: var(--bar-fact); }
+  .bars { display: flex; flex-direction: column; gap: 15px; margin-bottom: 26px; }
+  .bar-row {
+    display: grid; grid-template-columns: minmax(140px, 210px) 1fr minmax(92px, auto);
+    gap: 18px; align-items: center;
+  }
+  .bar-label { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .bar-platform { font-size: 14px; font-weight: 600; overflow-wrap: anywhere; }
+  .bar-format { font-size: 11.5px; color: var(--text-muted); }
+  .bar-pair { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+  .bar-line { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center; }
+  .bar-hold { min-width: 0; }
+  .bar { height: 15px; border-radius: 4px; min-width: 2px; }
+  .bar.plan { background: var(--bar-plan); }
+  .bar.fact { background: var(--bar-fact); }
+  .bar-tag { font-size: 12.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .bar-tag.warn { color: var(--warn-text); font-weight: 600; }
+  .bar-delta { display: flex; flex-direction: column; gap: 3px; align-items: flex-end; }
+  .bar-share { font-size: 11px; color: var(--text-muted); white-space: nowrap; }
+  .badge {
+    display: inline-block; padding: 2px 8px; border-radius: 6px; font-size: 12px;
+    font-weight: 700; font-variant-numeric: tabular-nums;
+  }
+  .badge.flat { background: var(--page); color: var(--text-muted); border: 1px solid var(--border); }
+  .badge.pos { background: color-mix(in srgb, var(--pos) 16%, transparent); color: var(--pos); }
+  .badge.neg { background: color-mix(in srgb, var(--neg) 16%, transparent); color: var(--neg); }
+  .cell-main { display: block; font-weight: 600; }
+  .cell-sub { display: block; font-size: 11.5px; color: var(--text-muted); }
+  .warn-text { color: var(--warn-text); font-weight: 600; }
+  table.compact th, table.compact td { padding: 8px 11px; }
+  @media (max-width: 720px) {
+    .bar-row { grid-template-columns: 1fr; gap: 6px; }
+    .bar-delta { align-items: flex-start; flex-direction: row; gap: 10px; }
+  }
   @media print {
     .toolbar { display: none; }
     body { padding: 0; background: #fff; }

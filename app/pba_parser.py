@@ -106,10 +106,16 @@ def _parse_blocks(rows: list[tuple]) -> list[dict]:
                 total_row = rows[i]
                 break
             if first:
-                data_rows.append(_row_dict(rows[i]))
+                row = _row_dict(rows[i])
+                # Ни плана, ни факта — площадки в этом периоде не было. В отчёте такая
+                # строка была бы шумом из нулей, а не информацией.
+                if any(
+                    (row["kpi_plan"], row["kpi_fact"], row["budget_plan"], row["budget_fact"])
+                ):
+                    data_rows.append(row)
             i += 1
 
-        if total_row is None or not data_rows:
+        if total_row is None:
             continue
 
         total = _row_dict(total_row)
