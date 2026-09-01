@@ -1,0 +1,357 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ПБА Gedeon Richter — сборка отчёта</title>
+<style>
+  :root {
+    color-scheme: light;
+    --surface-1: #fcfcfb; --page: #f9f9f7; --text-primary: #0b0b0b;
+    --text-secondary: #52514e; --text-muted: #898781;
+    --border: rgba(11,11,11,0.10); --accent: #1f6feb;
+    --pos: #0ca30c; --neg: #d02b2b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --surface-1: #1a1a19; --page: #0d0d0d; --text-primary: #ffffff;
+      --text-secondary: #c3c2b7; --text-muted: #898781;
+      --border: rgba(255,255,255,0.10); --pos: #45c745; --neg: #ff6b6b;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 34px 16px 70px; background: var(--page); color: var(--text-primary);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  .wrap { max-width: 900px; margin: 0 auto; }
+  h1 { font-size: 25px; margin: 0 0 6px; }
+  .subtitle { color: var(--text-secondary); font-size: 14px; margin: 0 0 24px; }
+  .card {
+    background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px;
+    padding: 22px; margin-bottom: 18px;
+  }
+  .card.disabled { opacity: 0.45; pointer-events: none; }
+  .step { display: flex; align-items: baseline; gap: 10px; margin-bottom: 14px; }
+  .step-num {
+    width: 24px; height: 24px; border-radius: 50%; background: var(--accent); color: #fff;
+    font-size: 13px; font-weight: 700; display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+  }
+  h2 { font-size: 17px; margin: 0; }
+  .hint { font-size: 13px; color: var(--text-secondary); margin: 0 0 14px; line-height: 1.55; }
+  .drop {
+    border: 2px dashed var(--border); border-radius: 10px; padding: 26px; text-align: center;
+    cursor: pointer; transition: border-color .15s, background .15s;
+  }
+  .drop:hover, .drop.over { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 6%, var(--surface-1)); }
+  .drop strong { font-size: 15px; }
+  .drop .sub { font-size: 12px; color: var(--text-muted); margin-top: 6px; }
+  input[type=file] { display: none; }
+  .months { display: flex; flex-direction: column; gap: 10px; }
+  .month {
+    display: flex; gap: 12px; align-items: flex-start; border: 1px solid var(--border);
+    border-radius: 10px; padding: 13px 15px; cursor: pointer;
+  }
+  .month.selected { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 7%, var(--surface-1)); }
+  .month input { margin-top: 3px; }
+  .month .title { font-weight: 600; font-size: 14px; }
+  .month .meta { font-size: 12px; color: var(--text-secondary); margin-top: 3px; line-height: 1.5; }
+  table.kw { width: 100%; border-collapse: collapse; font-size: 13px; }
+  table.kw th {
+    text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .04em;
+    color: var(--text-muted); padding: 0 8px 7px 0; font-weight: 700;
+  }
+  table.kw td { padding: 0 8px 9px 0; vertical-align: middle; }
+  input[type=text], select {
+    width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px;
+    background: var(--page); color: var(--text-primary); font-size: 13px; font-family: inherit;
+  }
+  .row-actions { display: flex; gap: 8px; align-items: center; margin-top: 4px; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 8px; padding: 9px 16px; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--surface-1); color: var(--text-primary);
+    font-size: 13px; font-weight: 600; cursor: pointer; font-family: inherit;
+  }
+  .btn:hover { border-color: var(--accent); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .btn.primary:disabled { opacity: .5; cursor: default; }
+  .btn.link { border: none; background: none; color: var(--accent); padding: 4px 0; }
+  .btn.icon { padding: 6px 10px; }
+  .toggles { display: flex; flex-direction: column; gap: 10px; margin: 4px 0 16px; }
+  .toggle { display: flex; gap: 9px; align-items: flex-start; font-size: 13px; line-height: 1.5; }
+  .toggle .sub { color: var(--text-muted); font-size: 12px; }
+  .geo-row { display: flex; gap: 12px; align-items: center; margin-bottom: 16px; font-size: 13px; }
+  .geo-row select { width: 120px; }
+  .status {
+    font-size: 13px; padding: 11px 14px; border-radius: 9px; margin-top: 14px; line-height: 1.55;
+    border: 1px solid var(--border);
+  }
+  .status.err { background: color-mix(in srgb, var(--neg) 12%, var(--surface-1)); color: var(--text-primary); }
+  .status.ok { background: color-mix(in srgb, var(--pos) 12%, var(--surface-1)); }
+  .status.info { background: var(--page); color: var(--text-secondary); }
+  .keys { font-size: 12px; color: var(--text-muted); margin-top: 12px; line-height: 1.6; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 5px; }
+  .dot.on { background: var(--pos); } .dot.off { background: #fab219; }
+  .spinner {
+    width: 14px; height: 14px; border: 2px solid rgba(255,255,255,.4); border-top-color: #fff;
+    border-radius: 50%; animation: spin .7s linear infinite; display: inline-block;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>ПБА Gedeon Richter</h1>
+  <p class="subtitle">Загрузите файл ПБА из Excel — соберём отчёт: план/факт по неделям и площадкам,
+    спрос по ключевым словам из Google и выводы от Клода.</p>
+
+  <div class="card" id="card-file">
+    <div class="step"><span class="step-num">1</span><h2>Файл ПБА</h2></div>
+    <p class="hint">Тот же xlsx, что присылают по кампании (weekly или monthly — без разницы).
+      Читаются все листы-месяцы внутри файла.</p>
+    <label class="drop" id="drop">
+      <input type="file" id="file" accept=".xlsx,.xlsm">
+      <div><strong>Перетащите файл сюда</strong> или нажмите, чтобы выбрать</div>
+      <div class="sub">.xlsx до 20 МБ</div>
+    </label>
+    <div id="file-status"></div>
+  </div>
+
+  <div class="card disabled" id="card-month">
+    <div class="step"><span class="step-num">2</span><h2>Месяц</h2></div>
+    <p class="hint">Недели без факта в расчёт выполнения не войдут — они попадут в отчёт с пометкой
+      «неделя не завершена», а не как недоосвоение бюджета.</p>
+    <div class="months" id="months"></div>
+  </div>
+
+  <div class="card disabled" id="card-keywords">
+    <div class="step"><span class="step-num">3</span><h2>Ключевые слова для Google</h2></div>
+    <p class="hint">Бренд и категория — минимум, который делает блок спроса осмысленным.
+      Роль влияет на цвет и на расчёт «бренд к категории».</p>
+    <table class="kw">
+      <thead><tr><th style="width:34%">Ключевое слово</th><th style="width:34%">Подпись в отчёте</th><th style="width:22%">Роль</th><th></th></tr></thead>
+      <tbody id="kw-rows"></tbody>
+    </table>
+    <div class="row-actions"><button class="btn link" id="kw-add">+ добавить ключевое слово</button></div>
+  </div>
+
+  <div class="card disabled" id="card-build">
+    <div class="step"><span class="step-num">4</span><h2>Собрать отчёт</h2></div>
+    <div class="geo-row">
+      <label for="geo">Гео для Google:</label>
+      <select id="geo"></select>
+    </div>
+    <div class="toggles">
+      <label class="toggle"><input type="checkbox" id="use-google" checked>
+        <span>Запрашивать спрос в Google Keyword Planner<br>
+        <span class="sub">Платный источник через Apify, примерно $0.012 за ключевое слово и до минуты ожидания.</span></span></label>
+      <label class="toggle"><input type="checkbox" id="use-ai" checked>
+        <span>Вывод от Клода<br>
+        <span class="sub">Без ключа или при ошибке отчёт всё равно соберётся — с арифметическим разбором и честной пометкой.</span></span></label>
+    </div>
+    <button class="btn primary" id="build">Собрать отчёт</button>
+    <div id="build-status"></div>
+    <div class="keys" id="keys"></div>
+  </div>
+</div>
+
+<script>
+const state = { upload: null, sheet: null };
+const $ = (id) => document.getElementById(id);
+
+function setStatus(el, text, kind) {
+  el.innerHTML = text ? `<div class="status ${kind || "info"}">${text}</div>` : "";
+}
+function enable(id, on) { $(id).classList.toggle("disabled", !on); }
+function fmtMoney(v) {
+  if (v === null || v === undefined) return "—";
+  return Math.round(v).toLocaleString("ru-RU") + " ₸";
+}
+
+// ---------- шаг 1: загрузка ----------
+const drop = $("drop"), fileInput = $("file");
+["dragenter", "dragover"].forEach(e => drop.addEventListener(e, ev => {
+  ev.preventDefault(); drop.classList.add("over");
+}));
+["dragleave", "drop"].forEach(e => drop.addEventListener(e, () => drop.classList.remove("over")));
+drop.addEventListener("drop", ev => {
+  ev.preventDefault();
+  if (ev.dataTransfer.files.length) uploadFile(ev.dataTransfer.files[0]);
+});
+fileInput.addEventListener("change", () => {
+  if (fileInput.files.length) uploadFile(fileInput.files[0]);
+});
+
+async function uploadFile(file) {
+  setStatus($("file-status"), "Читаю файл…", "info");
+  const form = new FormData();
+  form.append("file", file);
+  try {
+    const resp = await fetch("/api/upload", { method: "POST", body: form });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.detail || "не удалось прочитать файл");
+    state.upload = data;
+    setStatus($("file-status"),
+      `<strong>${data.filename}</strong><br>Клиент: ${data.client || "—"} · Бренд: ${data.brand || "—"} · Месяцев в файле: ${data.months.length}`,
+      "ok");
+    renderMonths(data.months);
+    prefillKeywords(data.brand);
+    enable("card-month", true); enable("card-keywords", true); enable("card-build", true);
+  } catch (err) {
+    state.upload = null;
+    setStatus($("file-status"), err.message, "err");
+  }
+}
+
+// ---------- шаг 2: месяц ----------
+function renderMonths(months) {
+  const box = $("months");
+  box.innerHTML = "";
+  months.forEach((m, i) => {
+    const closed = m.closed_weeks.length ? "недели " + m.closed_weeks.join(", ") : "нет";
+    const pending = m.pending_weeks.length ? "недели " + m.pending_weeks.join(", ") : "нет";
+    const delivery = m.delivery_pct === null ? "—" : (m.delivery_pct * 100).toFixed(1) + "%";
+    const label = document.createElement("label");
+    label.className = "month";
+    label.innerHTML = `
+      <input type="radio" name="month" value="${m.sheet.replace(/"/g, "&quot;")}">
+      <div>
+        <div class="title">${m.label}</div>
+        <div class="meta">План на месяц: ${fmtMoney(m.plan_month)} · Закрыто: ${closed} · Без факта: ${pending} · Выполнение по закрытым: ${delivery}</div>
+      </div>`;
+    label.querySelector("input").addEventListener("change", () => {
+      state.sheet = m.sheet;
+      [...box.querySelectorAll(".month")].forEach(el => el.classList.remove("selected"));
+      label.classList.add("selected");
+    });
+    box.appendChild(label);
+    // По умолчанию — последний месяц в файле: обычно это текущий отчётный.
+    if (i === months.length - 1) label.querySelector("input").click();
+  });
+}
+
+// ---------- шаг 3: ключевые слова ----------
+const KW_PLACEHOLDERS = {
+  brand: ["стопдиар", "Стопдиар (бренд)"],
+  category: ["диарея", "Диарея (категория)"],
+  other: ["средство от диареи", "Как называют в отчёте"],
+};
+
+function kwRow(keyword, label, role) {
+  const tr = document.createElement("tr");
+  const ph = KW_PLACEHOLDERS[role] || KW_PLACEHOLDERS.other;
+  tr.innerHTML = `
+    <td><input type="text" class="kw-word" placeholder="${ph[0]}" value="${keyword || ""}"></td>
+    <td><input type="text" class="kw-label" placeholder="${ph[1]}" value="${label || ""}"></td>
+    <td><select class="kw-role">
+      <option value="brand">бренд</option>
+      <option value="category">категория</option>
+      <option value="other">другое</option>
+    </select></td>
+    <td><button class="btn icon kw-del" title="убрать">×</button></td>`;
+  const roleSelect = tr.querySelector(".kw-role");
+  roleSelect.value = role || "other";
+  roleSelect.addEventListener("change", () => {
+    const next = KW_PLACEHOLDERS[roleSelect.value] || KW_PLACEHOLDERS.other;
+    tr.querySelector(".kw-word").placeholder = next[0];
+    tr.querySelector(".kw-label").placeholder = next[1];
+  });
+  tr.querySelector(".kw-del").addEventListener("click", () => tr.remove());
+  return tr;
+}
+$("kw-add").addEventListener("click", () => $("kw-rows").appendChild(kwRow("", "", "other")));
+
+function prefillKeywords(brand) {
+  const rows = $("kw-rows");
+  rows.innerHTML = "";
+  const b = (brand || "").trim();
+  rows.appendChild(kwRow(b.toLowerCase(), b ? `${b} (бренд)` : "", "brand"));
+  rows.appendChild(kwRow("", "", "category"));
+}
+prefillKeywords("");
+
+function collectKeywords() {
+  return [...$("kw-rows").querySelectorAll("tr")].map(tr => ({
+    keyword: tr.querySelector(".kw-word").value.trim(),
+    label: tr.querySelector(".kw-label").value.trim(),
+    role: tr.querySelector(".kw-role").value,
+  })).filter(k => k.keyword);
+}
+
+// ---------- шаг 4: сборка ----------
+async function loadHealth() {
+  try {
+    const h = await (await fetch("/api/health")).json();
+    const geo = $("geo");
+    geo.innerHTML = h.geos.map(g => `<option value="${g}">${g}</option>`).join("");
+    geo.value = h.geos.includes("KZ") ? "KZ" : h.geos[0];
+    $("keys").innerHTML = `
+      <div><span class="dot ${h.google_keywords_ready ? "on" : "off"}"></span>
+        Google по ключевым словам: ${h.google_keywords_ready ? "ключ Apify задан" : "нет APIFY_API_TOKEN в .env — блок спроса будет пустым"}</div>
+      <div><span class="dot ${h.claude_ready ? "on" : "off"}"></span>
+        Выводы Клода: ${h.claude_ready ? "ключ задан" : "нет ANTHROPIC_API_KEY в .env — вместо выводов будет арифметика по файлу"}</div>`;
+  } catch (err) {
+    $("keys").textContent = "Не удалось получить статус сервера: " + err.message;
+  }
+}
+loadHealth();
+
+$("build").addEventListener("click", async () => {
+  if (!state.upload || !state.sheet) {
+    setStatus($("build-status"), "Сначала загрузите файл и выберите месяц.", "err");
+    return;
+  }
+  const btn = $("build");
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Собираю…';
+  setStatus($("build-status"), "Считаю ПБА, запрашиваю спрос и выводы. Google отвечает до минуты.", "info");
+
+  try {
+    const resp = await fetch("/api/report", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        upload_id: state.upload.upload_id,
+        sheet: state.sheet,
+        keywords: collectKeywords(),
+        geo: $("geo").value,
+        use_google: $("use-google").checked,
+        use_ai: $("use-ai").checked,
+      }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.detail || "не удалось запустить сборку");
+    await poll(data.job_id);
+  } catch (err) {
+    setStatus($("build-status"), err.message, "err");
+    btn.disabled = false;
+    btn.textContent = "Собрать отчёт";
+  }
+});
+
+async function poll(jobId) {
+  const btn = $("build");
+  for (let i = 0; i < 300; i++) {
+    await new Promise(r => setTimeout(r, 1500));
+    const job = await (await fetch(`/api/report/${jobId}`)).json();
+    if (job.status === "done") {
+      setStatus($("build-status"), "Готово, открываю отчёт…", "ok");
+      window.location.href = job.view_url;
+      return;
+    }
+    if (job.status === "failed") {
+      setStatus($("build-status"), "Сборка упала: " + job.error, "err");
+      btn.disabled = false;
+      btn.textContent = "Собрать отчёт";
+      return;
+    }
+  }
+  setStatus($("build-status"), "Слишком долго — проверьте окно с логами сервера.", "err");
+  btn.disabled = false;
+  btn.textContent = "Собрать отчёт";
+}
+</script>
+</body>
+</html>
