@@ -66,51 +66,100 @@ def esc(value) -> str:
 
 # ---------- графики ----------
 
+def _text_width(text: str, font: float) -> float:
+    """Грубая оценка ширины строки в единицах viewBox. Точность не нужна — нужно решить,
+    влезает подпись в слот или нет."""
+    return len(text) * font * 0.58
+
+
+def _month_labels(trend: list[dict]) -> list[str]:
+    """Год подписываем только там, где он меняется: «Авг», «Сен», ..., «Янв ’26».
+    Печатать год у каждого месяца — гарантированная каша на 12 столбиках."""
+    labels, prev_year = [], None
+    for point in trend:
+        text = point["month"]
+        year = point.get("year")
+        if year and year != prev_year:
+            text += f" ’{str(year)[-2:]}"
+            prev_year = year
+        labels.append(text)
+    return labels
+
+
 def bar_chart(
-    trend: list[dict], color: str, width: int = 760, height: int = 260, font: int = 13
+    trend: list[dict], color: str, width: int = 900, height: int = 280, font: int = 15
 ) -> str:
-    """Столбики по месяцам. Крупные подписи и толстые бары — отчёт смотрят на встрече."""
+    """Столбики по месяцам. Кегль и набор подписей считаются от ширины слота, иначе на
+    12 месяцах подписи наезжают друг на друга (в единицах viewBox места просто нет)."""
     if not trend:
         return '<p class="muted">Нет данных для графика.</p>'
 
-    pad_left, pad_right, pad_top, pad_bottom = 8, 8, 34, 44
-    plot_w = width - pad_left - pad_right
-    plot_h = height - pad_top - pad_bottom
-    max_v = max((p["volume"] for p in trend), default=0) or 1
+    pad_x, pad_top = 10, 36
+    plot_w = width - pad_x * 2
     slot = plot_w / len(trend)
-    bar_w = min(slot * 0.62, 64)
+    bar_w = min(slot * 0.58, 58)
+    max_v = max((p["volume"] for p in trend), default=0) or 1
 
-    years = {p.get("year") for p in trend if p.get("year")}
-    show_year = len(years) > 1
+    tick_font = max(9.0, min(float(font), slot * 0.30))
+    # Кегль значений подбираем под самое длинное число: сначала уменьшаем шрифт,
+    # и только если и на минимальном не влезает — оставляем пик и последний месяц.
+    widest_value = max(len(num(p["volume"], 0)) for p in trend) * 0.58
+    val_font = max(9.0, min(float(font), slot * 0.92 / widest_value))
+    # Запас снизу: один ряд подписей или два (см. stagger ниже) плюс возможная сноска.
+    pad_bottom = 30 + tick_font * 2.2
+    plot_h = height - pad_top - pad_bottom
 
-    bars, labels, values = [], [], []
+    month_labels = _month_labels(trend)
+    widest_tick = max(_text_width(t, tick_font) for t in month_labels)
+    # Подписи в один ряд не влезают -> раскладываем в два ряда через одну, а не выкидываем
+    # каждую вторую: терять месяцы (и вместе с ними отметку года) хуже, чем два ряда.
+    stagger = widest_tick > slot
+    tick_step = 2 if stagger and widest_tick > slot * 2 else 1
+
+    value_labels = [num(p["volume"], 0) for p in trend]
+    show_all_values = max(_text_width(t, val_font) for t in value_labels) <= slot * 0.92
+    max_index = max(range(len(trend)), key=lambda i: trend[i]["volume"])
+    key_indexes = {max_index, len(trend) - 1}
+
+    bars, ticks, values = [], [], []
     for i, point in enumerate(trend):
-        month_label = esc(point["month"])
-        if show_year and point.get("year"):
-            month_label += f" ’{str(point['year'])[-2:]}"
         h = plot_h * (point["volume"] / max_v)
-        x = pad_left + slot * i + (slot - bar_w) / 2
+        x = pad_x + slot * i + (slot - bar_w) / 2
         y = pad_top + plot_h - h
+        dim = "" if (show_all_values or i in key_indexes) else " dim"
         bars.append(
             f'<rect x="{x:.1f}" y="{y:.1f}" width="{bar_w:.1f}" height="{max(h, 2):.1f}" '
-            f'rx="4" fill="{color}" />'
+            f'rx="4" fill="{color}"{" opacity=\'0.75\'" if dim else ""} />'
         )
-        labels.append(
-            f'<text class="viz-tick" x="{x + bar_w / 2:.1f}" y="{pad_top + plot_h + 26:.0f}" '
-            f'text-anchor="middle" style="font-size:{font}px">{month_label}</text>'
-        )
-        values.append(
-            f'<text class="viz-value" x="{x + bar_w / 2:.1f}" y="{y - 8:.1f}" '
-            f'text-anchor="middle" style="font-size:{font}px">{num(point["volume"], 0)}</text>'
-        )
+        if (len(trend) - 1 - i) % tick_step == 0:
+            row = 1 if (stagger and (len(trend) - 1 - i) % 2 == 1) else 0
+            tick_y = pad_top + plot_h + tick_font + 12 + row * (tick_font + 5)
+            ticks.append(
+                f'<text class="viz-tick" x="{x + bar_w / 2:.1f}" y="{tick_y:.1f}" '
+                f'text-anchor="middle" style="font-size:{tick_font:.1f}px">'
+                f"{month_labels[i]}</text>"
+            )
+        if show_all_values or i in key_indexes:
+            values.append(
+                f'<text class="viz-value" x="{x + bar_w / 2:.1f}" y="{y - 7:.1f}" '
+                f'text-anchor="middle" style="font-size:{val_font:.1f}px">'
+                f"{value_labels[i]}</text>"
+            )
 
     baseline = (
-        f'<line class="viz-axis" x1="{pad_left}" y1="{pad_top + plot_h}" '
-        f'x2="{width - pad_right}" y2="{pad_top + plot_h}" />'
+        f'<line class="viz-axis" x1="{pad_x}" y1="{pad_top + plot_h}" '
+        f'x2="{width - pad_x}" y2="{pad_top + plot_h}" />'
+    )
+    hint = (
+        ""
+        if show_all_values
+        else f'<text class="viz-hint" x="{pad_x}" y="{height - 6:.0f}" '
+        f'style="font-size:{tick_font * 0.85:.1f}px">подписаны пик и последний месяц</text>'
     )
     return (
-        f'<svg class="viz-svg" viewBox="0 0 {width} {height}" role="img">'
-        f'{"".join(bars)}{baseline}{"".join(labels)}{"".join(values)}</svg>'
+        f'<svg class="viz-svg" viewBox="0 0 {width} {height}" role="img" '
+        f'preserveAspectRatio="xMidYMid meet">'
+        f'{"".join(bars)}{baseline}{"".join(ticks)}{"".join(values)}{hint}</svg>'
     )
 
 
@@ -214,7 +263,7 @@ def _trend_grid(items: list[dict], kind: str) -> str:
             '<div class="chart-block">'
             f'<div class="chart-title"><span class="swatch" style="background:{color}"></span>'
             f'{esc(item["label"])}</div>'
-            f"{bar_chart(item['trend'], color, width=430, height=230, font=15)}"
+            f"{bar_chart(item['trend'], color, width=660, height=270, font=15)}"
             "</div>"
         )
     if not charts:
@@ -728,7 +777,8 @@ CSS = """
   .viz-svg { width: 100%; height: auto; display: block; overflow: visible; }
   .viz-axis { stroke: var(--axis); stroke-width: 1.5; }
   .viz-tick { fill: var(--text-secondary); font-size: 13px; }
-  .viz-value { fill: var(--text-primary); font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .viz-value { fill: var(--text-primary); font-weight: 700; font-variant-numeric: tabular-nums; }
+  .viz-hint { fill: var(--text-muted); }
   .footer-note { font-size: 12px; color: var(--text-muted); margin-top: 16px; line-height: 1.55; }
   .toolbar {
     max-width: 1180px; margin: 0 auto 18px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
