@@ -348,10 +348,16 @@ def _brands_section(demand: dict, block: dict) -> str:
 
     rank_tile = ""
     if block["our_rank"]:
+        tied = block.get("our_rank_tied_with") or []
+        note = (
+            f"делит место с: {esc(', '.join(tied))} — объёмы равны"
+            if tied
+            else "среди брендов с данными"
+        )
         rank_tile = (
             '<div class="stat-tile"><div class="label">Место по объёму запросов</div>'
             f'<div class="value">{block["our_rank"]} из {block["measured"]}</div>'
-            '<div class="delta">среди брендов с данными</div></div>'
+            f'<div class="delta">{note}</div></div>'
         )
     share_tile = ""
     if block["our_share"]:

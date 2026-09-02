@@ -142,9 +142,20 @@ def _groups(items: list[dict]) -> dict:
     brands_total = sum(i["volume"] for i in brands_measured)
     for item in brands:
         item["share"] = (item["volume"] / brands_total) if (brands_total and item["volume"]) else None
+    # Keyword Planner отдаёт объёмы корзинами (8 100, 12 100...), поэтому равные значения —
+    # обычное дело. Одинаковый объём = одинаковое место, иначе отчёт выдумывает разницу,
+    # которой в данных нет.
     ranked = sorted(brands_measured, key=lambda i: -i["volume"])
-    for place, item in enumerate(ranked, start=1):
+    place = 0
+    for index, item in enumerate(ranked):
+        if index == 0 or item["volume"] != ranked[index - 1]["volume"]:
+            place = index + 1
         item["rank"] = place
+    for item in ranked:
+        item["rank_tied_with"] = [
+            other["label"] for other in ranked
+            if other is not item and other["volume"] == item["volume"]
+        ]
 
     category_measured = [i for i in category if i["volume"] is not None]
     category_total = sum(i["volume"] for i in category_measured)
@@ -174,6 +185,7 @@ def _groups(items: list[dict]) -> dict:
             "missing": len(brands) - len(brands_measured),
             "ours": ours["label"] if ours else None,
             "our_rank": ours.get("rank") if ours else None,
+            "our_rank_tied_with": ours.get("rank_tied_with") or [] if ours else [],
             "our_share": ours.get("share") if ours else None,
         },
         "category": {
