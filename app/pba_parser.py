@@ -34,6 +34,12 @@ COL_PLATFORM, COL_FORMAT, COL_BUY_MODEL = 0, 1, 2
 COL_KPI_PLAN, COL_KPI_FACT, COL_KPI_DIFF, COL_KPI_PCT = 3, 4, 5, 6
 COL_BUDGET_PLAN, COL_BUDGET_FACT = 7, 8
 
+# Потолки на размер файла: 20 МБ xlsx распаковывается в гигабайты, а лист на миллионы
+# ячеек съест память процесса. Реальный ПБА — это единицы листов и десятки строк,
+# так что запас тут огромный.
+MAX_SHEETS = 24
+MAX_ROWS_PER_SHEET = 4000
+
 
 class ParseError(ValueError):
     """Файл не похож на ПБА — сообщение показывается пользователю как есть."""
@@ -237,13 +243,22 @@ def parse_pba_file(path) -> dict:
     """Возвращает {'client', 'brand', 'months': [...]} — по одному месяцу на лист."""
     wb = openpyxl.load_workbook(path, data_only=True, read_only=True)
     try:
+        if len(wb.sheetnames) > MAX_SHEETS:
+            raise ParseError(
+                f"В файле {len(wb.sheetnames)} листов — это не похоже на ПБА "
+                f"(ожидается до {MAX_SHEETS})."
+            )
         months = []
         for name in wb.sheetnames:
             ws = wb[name]
-            rows = [
-                tuple(row) + (None,) * max(0, 10 - len(row))
-                for row in ws.iter_rows(values_only=True)
-            ]
+            rows = []
+            for row in ws.iter_rows(values_only=True):
+                rows.append(tuple(row) + (None,) * max(0, 10 - len(row)))
+                if len(rows) > MAX_ROWS_PER_SHEET:
+                    raise ParseError(
+                        f"На листе «{name}» больше {MAX_ROWS_PER_SHEET} строк — "
+                        "это не похоже на ПБА."
+                    )
             parsed = _parse_sheet(name, rows)
             if parsed:
                 months.append(parsed)

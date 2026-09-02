@@ -19,7 +19,7 @@ from datetime import datetime
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -31,6 +31,7 @@ from app.ai_summary import build_ai_summary  # noqa: E402  (после load_dote
 from app.pba_parser import ParseError, parse_pba_file  # noqa: E402
 from app.report_html import render_report  # noqa: E402
 from app.search_demand import GEO_TARGET_CONSTANTS, fetch_google_demand  # noqa: E402
+from app import security  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 # httpx на INFO печатает полный URL каждого запроса — лишний шум и риск утечки токенов.
@@ -42,13 +43,59 @@ UPLOAD_DIR.mkdir(exist_ok=True)
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 
+# Сколько последних загрузок и отчётов держим. Без потолка процесс на хостинге
+# течёт по памяти, а uploads/ забивает диск.
+MAX_KEPT_UPLOADS = 30
+MAX_KEPT_JOBS = 30
+
 app = FastAPI(title="ПБА Gedeon Richter")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+
+@app.middleware("http")
+async def guard(request, call_next):
+    """Пароль на весь сайт, включая просмотр и скачивание отчётов: в них бюджеты клиента.
+    Локальный запуск пароля не требует, чтобы start.bat на своей машине работал как раньше."""
+    client_host = request.client.host if request.client else None
+    if not security.is_local(client_host):
+        if not security.credentials_configured():
+            return JSONResponse(
+                {"detail": "Сайт не настроен: на хостинге не задан PBA_PASSWORD."},
+                status_code=503,
+            )
+        if not security.check_basic_auth(request.headers.get("authorization")):
+            return Response(
+                status_code=401,
+                content="Нужен логин и пароль.",
+                headers={"WWW-Authenticate": f'Basic realm="{security.REALM}", charset="UTF-8"'},
+            )
+
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    return response
 
 # Хранилища в памяти процесса. Инструмент однопользовательский и локальный,
 # поэтому без базы: интерфейс узкий, при необходимости меняется на что угодно.
 _uploads: dict[str, dict] = {}
 _jobs: dict[str, dict] = {}
+# Ссылки на фоновые задачи: без них сборщик мусора может убрать задачу до завершения.
+_tasks: set[asyncio.Task] = set()
+
+
+def _trim_uploads() -> None:
+    """Словари в Python сохраняют порядок вставки, поэтому первый ключ — самый старый."""
+    while len(_uploads) > MAX_KEPT_UPLOADS:
+        oldest_key = next(iter(_uploads))
+        oldest = _uploads.pop(oldest_key)
+        path = oldest.get("path")
+        if path:
+            Path(path).unlink(missing_ok=True)
+
+
+def _trim_jobs() -> None:
+    while len(_jobs) > MAX_KEPT_JOBS:
+        _jobs.pop(next(iter(_jobs)), None)
 
 
 class KeywordIn(BaseModel):
@@ -60,7 +107,8 @@ class KeywordIn(BaseModel):
 class ReportRequest(BaseModel):
     upload_id: str
     sheet: str
-    keywords: list[KeywordIn] = []
+    # Потолок на ключи — прямая защита кошелька: каждый ключ это платный запрос в Apify.
+    keywords: list[KeywordIn] = Field(default_factory=list, max_length=security.MAX_KEYWORDS)
     geo: str = "KZ"
     use_google: bool = True
     use_ai: bool = True
@@ -105,6 +153,7 @@ async def upload(file: UploadFile = File(...)) -> JSONResponse:
         raise HTTPException(400, f"Не удалось прочитать файл: {type(exc).__name__}") from exc
 
     _uploads[upload_id] = {"path": path, "filename": file.filename, "parsed": parsed}
+    _trim_uploads()
 
     return JSONResponse(
         {
@@ -130,7 +179,16 @@ async def upload(file: UploadFile = File(...)) -> JSONResponse:
 
 
 @app.post("/api/report")
-async def create_report(req: ReportRequest) -> JSONResponse:
+async def create_report(req: ReportRequest, request: Request) -> JSONResponse:
+    client_host = request.client.host if request.client else "unknown"
+    if not security.is_local(client_host) and not security.report_limiter.allow(client_host):
+        wait = security.report_limiter.retry_after_seconds(client_host)
+        raise HTTPException(
+            429,
+            f"Слишком много сборок за час (лимит {security.REPORTS_PER_HOUR}) — "
+            f"защита от лишних трат на Google. Попробуйте через {wait // 60 + 1} мин.",
+        )
+
     upload = _uploads.get(req.upload_id)
     if not upload:
         raise HTTPException(404, "Файл не найден — загрузите его заново (сервер перезапускался?).")
@@ -141,7 +199,10 @@ async def create_report(req: ReportRequest) -> JSONResponse:
 
     job_id = uuid.uuid4().hex
     _jobs[job_id] = {"status": "running", "error": None, "report": None}
-    asyncio.create_task(_run_job(job_id, upload, month, req))
+    _trim_jobs()
+    task = asyncio.create_task(_run_job(job_id, upload, month, req))
+    _tasks.add(task)
+    task.add_done_callback(_tasks.discard)
     return JSONResponse({"job_id": job_id})
 
 
@@ -181,11 +242,13 @@ async def _run_job(job_id: str, upload: dict, month: dict, req: ReportRequest) -
         }
         _jobs[job_id] = {"status": "done", "error": None, "report": report}
         logger.info("report %s ready (%s / %s)", job_id, brand, month["label"])
-    except Exception as exc:
+    except Exception:
+        # Наружу — общее сообщение: текст исключения может содержать внутренние детали
+        # (адреса, куски ответов API). Подробности остаются в логе сервера.
         logger.exception("job %s failed", job_id)
         _jobs[job_id] = {
             "status": "failed",
-            "error": f"{type(exc).__name__}: {exc}",
+            "error": "Не удалось собрать отчёт. Подробности в логах сервера.",
             "report": None,
         }
 
