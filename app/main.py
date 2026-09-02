@@ -15,7 +15,7 @@ import logging
 import os
 import re
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -249,6 +249,8 @@ async def _run_job(job_id: str, upload: dict, month: dict, req: ReportRequest) -
             "generated_at": datetime.now().strftime("%d.%m.%Y %H:%M"),
         }
         html = render_report(report, job_id=None)
+        report["created_at"] = datetime.now(timezone.utc).isoformat()
+        report["size_bytes"] = len(html.encode("utf-8"))
         stored = await storage.save_report(job_id, report, html)
         report["stored"] = stored
         _jobs[job_id] = {"status": "done", "error": None, "report": report}
@@ -306,39 +308,85 @@ async def download_report(job_id: str) -> Response:
     )
 
 
+def _memory_reports() -> list[dict]:
+    """Отчёты этого запуска — чтобы собранный отчёт появлялся в списке сразу,
+    не дожидаясь, пока настроят хранилище."""
+    rows = []
+    for job_id, job in _jobs.items():
+        report = job.get("report")
+        if job.get("status") != "done" or not report:
+            continue
+        rows.append(
+            {
+                "id": job_id,
+                "brand": report.get("brand"),
+                "client": report.get("client"),
+                "month": report["month"].get("label"),
+                "created_at": report.get("created_at"),
+                "size_bytes": report.get("size_bytes"),
+                "stored": bool(report.get("stored")),
+            }
+        )
+    return rows
+
+
 @app.get("/reports", response_class=HTMLResponse)
 async def reports_index() -> HTMLResponse:
-    if not storage.configured():
-        return HTMLResponse(
-            render_reports_page(
-                [],
-                note="Хранение отчётов не настроено: на сервере нет SUPABASE_URL и "
-                "SUPABASE_SERVICE_KEY. Отчёты собираются, но не сохраняются — "
-                "скачивайте HTML сразу.",
-            )
+    reports = _memory_reports()
+    note = None
+
+    if storage.configured():
+        try:
+            stored_rows = await storage.list_reports()
+        except Exception:
+            logger.exception("не удалось получить список отчётов")
+            note = "Хранилище не ответило — ниже только отчёты этого запуска."
+        else:
+            known = {r["id"] for r in reports}
+            for row in stored_rows:
+                if row.get("id") in known:
+                    continue
+                row["stored"] = True
+                reports.append(row)
+    elif reports:
+        note = (
+            "Хранение не настроено (нет SUPABASE_URL и SUPABASE_SERVICE_KEY): отчёты ниже "
+            "живут только до перезапуска сайта. Скачивайте HTML, чтобы не потерять."
         )
-    try:
-        rows = await storage.list_reports()
-    except Exception:
-        logger.exception("не удалось получить список отчётов")
-        return HTMLResponse(
-            render_reports_page([], note="Хранилище не ответило. Подробности в логах сервера."),
-            status_code=502,
+    else:
+        note = (
+            "Хранение отчётов не настроено: на сервере нет SUPABASE_URL и "
+            "SUPABASE_SERVICE_KEY. Отчёты будут собираться и появляться в этом списке, "
+            "но исчезнут при перезапуске сайта — скачивайте HTML сразу."
         )
-    return HTMLResponse(render_reports_page(rows))
+
+    reports.sort(key=lambda r: r.get("created_at") or "", reverse=True)
+    return HTMLResponse(render_reports_page(reports, note=note))
 
 
 async def _stored_report(report_id: str) -> tuple[str, dict]:
-    if not storage.configured():
-        raise HTTPException(503, "Хранение отчётов не настроено.")
-    try:
-        found = await storage.get_report_html(report_id)
-    except Exception as exc:
-        logger.exception("не удалось прочитать отчёт %s", report_id)
-        raise HTTPException(502, "Хранилище не ответило.") from exc
-    if not found:
-        raise HTTPException(404, "Такого отчёта нет — возможно, он был удалён.")
-    return found
+    """Один адрес на оба случая: сохранённый отчёт читаем из хранилища, а собранный
+    в этом запуске — рисуем из памяти. Иначе ссылки на свежий отчёт ломались бы,
+    пока хранилище не настроено."""
+    if storage.configured():
+        try:
+            found = await storage.get_report_html(report_id)
+        except Exception:
+            logger.exception("не удалось прочитать отчёт %s из хранилища", report_id)
+            found = None
+        if found:
+            return found
+
+    job = _jobs.get(report_id)
+    report = job.get("report") if job and job.get("status") == "done" else None
+    if not report:
+        raise HTTPException(
+            404,
+            "Такого отчёта нет: он был удалён, либо собран до перезапуска сайта и не "
+            "сохранён в хранилище.",
+        )
+    meta = {"brand": report.get("brand"), "month": report["month"].get("label")}
+    return render_report(report, job_id=None), meta
 
 
 @app.get("/reports/{report_id}", response_class=HTMLResponse)
@@ -360,13 +408,13 @@ async def stored_report_download(report_id: str) -> Response:
 
 @app.post("/reports/{report_id}/delete")
 async def stored_report_delete(report_id: str) -> Response:
-    if not storage.configured():
-        raise HTTPException(503, "Хранение отчётов не настроено.")
-    try:
-        await storage.delete_report(report_id)
-    except Exception as exc:
-        logger.exception("не удалось удалить отчёт %s", report_id)
-        raise HTTPException(502, "Хранилище не ответило.") from exc
+    _jobs.pop(report_id, None)
+    if storage.configured():
+        try:
+            await storage.delete_report(report_id)
+        except Exception as exc:
+            logger.exception("не удалось удалить отчёт %s", report_id)
+            raise HTTPException(502, "Хранилище не ответило.") from exc
     # 303 — чтобы браузер после POST сделал обычный GET списка и не переспрашивал.
     return Response(status_code=303, headers={"Location": "/reports"})
 
