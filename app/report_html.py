@@ -254,7 +254,9 @@ def _volume_bars(items: list[dict], kind: str) -> str:
             )
             share = item.get("share")
             share_html = (
-                f'<span class="bar-share">{share * 100:.0f}% блока</span>' if share else ""
+                f'<span class="bar-share">{share * 100:.0f}% блока</span>'
+                if share and len(measured) > 1
+                else ""
             )
 
         lines.append(
@@ -320,8 +322,32 @@ def _demand_header(demand: dict, title: str) -> str:
 def _brands_section(demand: dict, block: dict) -> str:
     if not block["items"]:
         return ""
+
+    # Одного бренда мало для доли голоса: 100% в таком блоке — это доля бренда в самом
+    # себе, а не расстановка сил. Показываем объём и просим добавить конкурентов.
+    if block["measured"] < 2:
+        volume_tile = (
+            '<div class="stat-tile"><div class="label">Запросов по бренду</div>'
+            f'<div class="value">{num(block["total_volume"], 0)}</div>'
+            '<div class="delta">в месяц</div></div>'
+            if block["total_volume"]
+            else ""
+        )
+        return (
+            '<section class="card section">'
+            + _demand_header(demand, "Бренд в поиске")
+            + f'<div class="stats-row">{volume_tile}</div>'
+            + '<div class="callout">Доля голоса не считается: в блоке только один бренд '
+            "с данными. Добавьте конкурентов в первый блок ключевых слов — тогда появятся "
+            "доля голоса и место по объёму запросов.</div>"
+            + _volume_bars(block["items"], "brands")
+            + _demand_note(block, "брендов")
+            + _trend_grid(block["items"], "brands")
+            + "</section>"
+        )
+
     rank_tile = ""
-    if block["our_rank"] and block["measured"] > 1:
+    if block["our_rank"]:
         rank_tile = (
             '<div class="stat-tile"><div class="label">Место по объёму запросов</div>'
             f'<div class="value">{block["our_rank"]} из {block["measured"]}</div>'
@@ -337,7 +363,7 @@ def _brands_section(demand: dict, block: dict) -> str:
     total_tile = (
         '<div class="stat-tile"><div class="label">Всего брендовых запросов</div>'
         f'<div class="value">{num(block["total_volume"], 0)}</div>'
-        '<div class="delta">в месяц, бренд + конкуренты</div></div>'
+        f'<div class="delta">в месяц по {block["measured"]} брендам</div></div>'
         if block["total_volume"]
         else ""
     )
@@ -876,8 +902,8 @@ CSS = """
     background: color-mix(in srgb, var(--bar-fact) 18%, transparent); color: var(--bar-fact);
   }
   .charts-grid {
-    display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
-    gap: 4px 26px; margin-top: 14px;
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(400px, 560px));
+    justify-content: start; gap: 4px 26px; margin-top: 14px;
   }
   .chart-volume {
     margin-left: auto; font-size: 12.5px; font-weight: 700; font-variant-numeric: tabular-nums;
