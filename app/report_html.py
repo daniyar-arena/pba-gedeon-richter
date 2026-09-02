@@ -902,9 +902,13 @@ CSS = """
     background: color-mix(in srgb, var(--bar-fact) 18%, transparent); color: var(--bar-fact);
   }
   .charts-grid {
-    display: grid; grid-template-columns: repeat(auto-fill, minmax(400px, 560px));
+    /* auto-fill считает число дорожек по максимуму minmax, поэтому minmax(400px, 560px)
+       давал одну колонку на всю карточку. Дорожки тянем в 1fr, а ширину графика
+       ограничиваем самим блоком — тогда и два в ряд, и один не растягивается. */
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(400px, 1fr));
     justify-content: start; gap: 4px 26px; margin-top: 14px;
   }
+  .charts-grid .chart-block { max-width: 560px; }
   .chart-volume {
     margin-left: auto; font-size: 12.5px; font-weight: 700; font-variant-numeric: tabular-nums;
     color: var(--text-secondary); white-space: nowrap;

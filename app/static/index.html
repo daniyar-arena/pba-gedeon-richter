@@ -77,6 +77,11 @@
   }
   .kw-block-head .small { text-transform: none; letter-spacing: 0; font-weight: 400; }
   td.kw-action { width: 90px; text-align: right; white-space: nowrap; }
+  .kw-count {
+    font-size: 12px; color: var(--text-secondary); border: 1px solid var(--border);
+    border-radius: 8px; padding: 9px 12px; background: var(--page);
+  }
+  .kw-count.warn { border-color: #fab219; color: var(--text-primary); }
   .kw-fixed {
     font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em;
     color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent);
@@ -142,8 +147,10 @@
   <div class="card disabled" id="card-keywords">
     <div class="step"><span class="step-num">3</span><h2>Ключевые слова для Google</h2></div>
     <p class="hint">Два блока. Первый — наш бренд и конкуренты: считаем долю голоса в поиске
-      и место по объёму запросов. Второй — самые широкие запросы категории: объём спроса и
-      какая его часть приходится на бренд. Пустые строки просто игнорируются.</p>
+      и место по объёму запросов. Второй — симптоматика, самые широкие запросы категории:
+      объём спроса и какая его часть приходится на бренд. На каждое заполненное поле —
+      свой график динамики за 12 месяцев.</p>
+    <p class="hint" id="kw-preset-note"></p>
 
     <div class="kw-block">
       <div class="kw-block-head">Блок 1 — бренд и конкуренты
@@ -156,7 +163,7 @@
     </div>
 
     <div class="kw-block">
-      <div class="kw-block-head">Блок 2 — категория
+      <div class="kw-block-head">Блок 2 — симптоматика и категория
         <span class="muted small">самые широкие запросы, обычно 4</span></div>
       <table class="kw">
         <thead><tr><th style="width:38%">Ключевое слово</th><th style="width:42%">Подпись в отчёте</th><th></th></tr></thead>
@@ -164,6 +171,8 @@
       </table>
       <div class="row-actions"><button class="btn link" data-add="category">+ добавить запрос</button></div>
     </div>
+
+    <div class="kw-count" id="kw-count"></div>
   </div>
 
   <div class="card disabled" id="card-build">
@@ -263,14 +272,33 @@ function renderMonths(months) {
 
 // ---------- шаг 3: ключевые слова ----------
 // Роль строки задаётся блоком, а не выпадашкой: наш бренд — первая строка блока 1
-// (её нельзя удалить), остальные строки блока 1 — конкуренты, блок 2 — категория.
+// (её нельзя удалить), остальные строки блока 1 — конкуренты, блок 2 — симптоматика.
+// Значения подставляются реально (а не серой подсказкой): раньше плейсхолдеры выглядели
+// как заполненные поля, в Google уходил один бренд, и в отчёте был один график вместо восьми.
+const BRAND_PRESETS = {
+  "гроприносин": {
+    competitors: [["изопринозин", "Изопринозин"], ["кагоцел", "Кагоцел"], ["арбидол", "Арбидол"]],
+    category: [["грипп", "Грипп"], ["простуда", "Простуда"], ["орви", "ОРВИ"],
+               ["противовирусные препараты", "Противовирусные препараты"]],
+  },
+  "стопдиар": {
+    competitors: [["энтерофурил", "Энтерофурил"], ["смекта", "Смекта"], ["лоперамид", "Лоперамид"]],
+    category: [["диарея", "Диарея"], ["понос", "Понос"], ["отравление", "Отравление"],
+               ["кишечная инфекция", "Кишечная инфекция"]],
+  },
+};
+const EMPTY_PRESET = {
+  competitors: [["", "Конкурент 1"], ["", "Конкурент 2"], ["", "Конкурент 3"]],
+  category: [["", "Симптом 1"], ["", "Симптом 2"], ["", "Симптом 3"], ["", "Симптом 4"]],
+};
 const KW_HINTS = {
-  competitor: [["изопринозин", "Изопринозин"], ["кагоцел", "Кагоцел"], ["арбидол", "Арбидол"]],
-  category: [["грипп", "Грипп"], ["простуда", "Простуда"], ["орви", "ОРВИ"],
-             ["противовирусные препараты", "Противовирусные препараты"]],
+  brand: ["бренд", "Как назвать в отчёте"],
+  competitor: ["бренд конкурента", "Как назвать в отчёте"],
+  category: ["симптом или широкий запрос", "Как назвать в отчёте"],
 };
 
-function kwRow(role, hint, value, label, fixed) {
+function kwRow(role, value, label, fixed) {
+  const hint = KW_HINTS[role] || KW_HINTS.category;
   const tr = document.createElement("tr");
   tr.dataset.role = role;
   tr.innerHTML = `
@@ -285,24 +313,19 @@ function kwRow(role, hint, value, label, fixed) {
     btn.className = "btn icon";
     btn.title = "убрать";
     btn.textContent = "×";
-    btn.addEventListener("click", () => tr.remove());
+    btn.addEventListener("click", () => { tr.remove(); updateKwCount(); });
     cell.appendChild(btn);
   }
+  tr.querySelectorAll("input").forEach(i => i.addEventListener("input", updateKwCount));
   return tr;
-}
-
-function nextHint(role, index) {
-  const list = KW_HINTS[role] || [];
-  return list[index % list.length] || ["ключевое слово", "Как назвать в отчёте"];
 }
 
 document.querySelectorAll("[data-add]").forEach(btn => {
   btn.addEventListener("click", () => {
     const which = btn.dataset.add;
     const tbody = document.getElementById(which === "brands" ? "kw-brands" : "kw-category");
-    const role = which === "brands" ? "competitor" : "category";
-    const index = tbody.querySelectorAll(`tr[data-role="${role}"]`).length;
-    tbody.appendChild(kwRow(role, nextHint(role, index), "", "", false));
+    tbody.appendChild(kwRow(which === "brands" ? "competitor" : "category", "", "", false));
+    updateKwCount();
   });
 });
 
@@ -313,9 +336,16 @@ function prefillKeywords(brand) {
   category.innerHTML = "";
 
   const b = (brand || "").trim();
-  brands.appendChild(kwRow("brand", ["гроприносин", "Гроприносин"], b.toLowerCase(), b, true));
-  KW_HINTS.competitor.forEach((hint, i) => brands.appendChild(kwRow("competitor", hint, "", "", false)));
-  KW_HINTS.category.forEach(hint => category.appendChild(kwRow("category", hint, "", "", false)));
+  const preset = BRAND_PRESETS[b.toLowerCase()] || EMPTY_PRESET;
+  brands.appendChild(kwRow("brand", b.toLowerCase(), b, true));
+  preset.competitors.forEach(([word, label]) => brands.appendChild(kwRow("competitor", word, label, false)));
+  preset.category.forEach(([word, label]) => category.appendChild(kwRow("category", word, label, false)));
+
+  const known = Boolean(BRAND_PRESETS[b.toLowerCase()]);
+  document.getElementById("kw-preset-note").innerHTML = known
+    ? `Конкуренты и симптоматика подставлены по умолчанию для бренда «${b}». Проверьте и поправьте — считаться будет то, что в полях.`
+    : "Для этого бренда готового списка нет: впишите конкурентов и симптоматику сами.";
+  updateKwCount();
 }
 prefillKeywords("");
 
@@ -328,6 +358,15 @@ function collectKeywords() {
     const fallback = keyword ? keyword[0].toUpperCase() + keyword.slice(1) : "";
     return { keyword, label: label || fallback, role: tr.dataset.role };
   }).filter(k => k.keyword);
+}
+
+function updateKwCount() {
+  const filled = collectKeywords().length;
+  const total = document.querySelectorAll("#kw-brands tr, #kw-category tr").length;
+  const el = document.getElementById("kw-count");
+  if (!el) return;
+  el.textContent = `Заполнено ${filled} из ${total} — столько графиков и будет в отчёте.`;
+  el.classList.toggle("warn", filled < total);
 }
 
 // ---------- шаг 4: сборка ----------
