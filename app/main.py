@@ -57,7 +57,9 @@ async def guard(request, call_next):
     """Пароль на весь сайт, включая просмотр и скачивание отчётов: в них бюджеты клиента.
     Локальный запуск пароля не требует, чтобы start.bat на своей машине работал как раньше."""
     client_host = request.client.host if request.client else None
-    if not security.is_local(client_host):
+    # /healthz дёргает сам хостинг снаружи — за паролем он получал бы 401 и считал
+    # сервис нерабочим. Эта ручка отдаёт только «живой», без статуса ключей.
+    if request.url.path != "/healthz" and not security.is_local(client_host):
         if not security.credentials_configured():
             return JSONResponse(
                 {"detail": "Сайт не настроен: на хостинге не задан PBA_PASSWORD."},
@@ -117,6 +119,12 @@ class ReportRequest(BaseModel):
 @app.get("/", response_class=HTMLResponse)
 async def index() -> HTMLResponse:
     return HTMLResponse((STATIC_DIR / "index.html").read_text(encoding="utf-8"))
+
+
+@app.get("/healthz")
+async def healthz() -> dict:
+    """Проверка живости для хостинга: открыта, поэтому ничего лишнего не сообщает."""
+    return {"ok": True}
 
 
 @app.get("/api/health")

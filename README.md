@@ -57,16 +57,22 @@
 `gedeon-richter\wordstat-dashboards\.env`, ключ Anthropic — из бэкапа
 Digital Audit Tool. Файл `.env` в git не попадает.
 
-## Выкладка на хостинг (Railway)
+## Выкладка на хостинг
 
-Сайт готов к деплою: `Procfile` и `.python-version` в корне, версии зависимостей
-зафиксированы в `requirements.txt`.
+Сайт готов к деплою: `Procfile`, `render.yaml` и `.python-version` в корне, версии
+зависимостей зафиксированы в `requirements.txt`.
 
-1. Залить репозиторий на GitHub (без `.env` — он в `.gitignore`).
-2. В Railway: New Project → Deploy from GitHub repo → выбрать этот репозиторий.
-3. В разделе Variables вписать **самому** (Claude ключи в чужие панели не вводит):
-   `APIFY_API_TOKEN`, `ANTHROPIC_API_KEY`, `PBA_USER`, `PBA_PASSWORD`.
-4. Открыть выданный домен, браузер спросит логин и пароль из `PBA_USER`/`PBA_PASSWORD`.
+**Render (бесплатный тариф).** Подключаете репозиторий, Render читает `render.yaml`
+и создаёт сервис сам. Переменные `PBA_PASSWORD`, `APIFY_API_TOKEN`,
+`ANTHROPIC_API_KEY` помечены `sync: false` — их значения в репозиторий не попадают,
+вписываете сами в панели. На бесплатном тарифе сервис засыпает без трафика, первый
+заход после паузы занимает до минуты.
+
+**Railway.** New Project → Deploy from GitHub repo → те же четыре переменные в
+разделе Variables. С 2023 года бесплатных деплоев нет, нужен тариф Hobby.
+
+Проверка живости у хостингов идёт на `/healthz` — она открыта (отдаёт только
+«живой»), всё остальное закрыто паролем.
 
 **Что защищает сайт снаружи:**
 

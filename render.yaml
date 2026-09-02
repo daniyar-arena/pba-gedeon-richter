@@ -1,0 +1,23 @@
+# Блюпринт для Render: подключаете репозиторий, Render читает этот файл и создаёт
+# сервис сам. Секреты помечены sync: false — их значения в репозиторий не попадают,
+# Render спросит их при первом деплое (или впишете в Environment).
+services:
+  - type: web
+    name: pba-gedeon-richter
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /healthz
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.10
+      - key: PBA_USER
+        value: havas
+      # Ниже — то, что вписываете сами в панели Render:
+      - key: PBA_PASSWORD
+        sync: false
+      - key: APIFY_API_TOKEN
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
