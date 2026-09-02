@@ -22,17 +22,16 @@ if errorlevel 1 (
 
 if not exist ".env" copy ".env.example" ".env" >nul
 
-rem Lokalnyj zapusk: parol ne sprashivaem. Na hostinge etoj peremennoj net,
-rem poetomu tam parol obyazatelen (sm. app/security.py).
-set "PBA_LOCAL=1"
-
 echo.
 echo   PBA Gedeon Richter
 echo   Site: http://127.0.0.1:8765
 echo   Close this window when you are done.
 echo.
 start "" http://127.0.0.1:8765
-.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8765
+rem Zapusk cherez run_local.py: on stavit PBA_LOCAL=1 vnutri processa.
+rem Cherez `set` v .bat peremennaja ne doxodit - venv python.exe pereza-
+rem puskaet bazovyj interpretator i okruzhenie terjaetsja.
+.venv\Scripts\python.exe run_local.py
 echo.
 echo Server stopped. If there is an error above, copy it and show it to Claude.
 pause

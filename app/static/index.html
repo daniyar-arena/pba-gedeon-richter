@@ -26,6 +26,7 @@
     font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
   }
   .wrap { max-width: 900px; margin: 0 auto; }
+  .head-row { display: flex; align-items: center; gap: 14px; justify-content: space-between; }
   h1 { font-size: 25px; margin: 0 0 6px; }
   .subtitle { color: var(--text-secondary); font-size: 14px; margin: 0 0 24px; }
   .card {
@@ -121,9 +122,13 @@
 </head>
 <body>
 <div class="wrap">
-  <h1>ПБА Gedeon Richter</h1>
+  <div class="head-row">
+    <h1>ПБА Gedeon Richter</h1>
+    <a class="btn" href="/reports">Мои отчёты</a>
+  </div>
   <p class="subtitle">Загрузите файл ПБА из Excel — соберём отчёт: план/факт по неделям и площадкам,
-    спрос по ключевым словам из Google и выводы от Клода.</p>
+    спрос по ключевым словам из Google и выводы от Клода. Готовый отчёт сохраняется
+    и остаётся доступен в «Моих отчётах».</p>
 
   <div class="card" id="card-file">
     <div class="step"><span class="step-num">1</span><h2>Файл ПБА</h2></div>

@@ -31,7 +31,8 @@ from app.ai_summary import build_ai_summary  # noqa: E402  (после load_dote
 from app.pba_parser import ParseError, parse_pba_file  # noqa: E402
 from app.report_html import render_report  # noqa: E402
 from app.search_demand import GEO_TARGET_CONSTANTS, fetch_google_demand  # noqa: E402
-from app import security  # noqa: E402
+from app import security, storage  # noqa: E402
+from app.reports_page import render_reports_page  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 # httpx на INFO печатает полный URL каждого запроса — лишний шум и риск утечки токенов.
@@ -247,8 +248,13 @@ async def _run_job(job_id: str, upload: dict, month: dict, req: ReportRequest) -
             "source_file": upload["filename"],
             "generated_at": datetime.now().strftime("%d.%m.%Y %H:%M"),
         }
+        html = render_report(report, job_id=None)
+        stored = await storage.save_report(job_id, report, html)
+        report["stored"] = stored
         _jobs[job_id] = {"status": "done", "error": None, "report": report}
-        logger.info("report %s ready (%s / %s)", job_id, brand, month["label"])
+        logger.info(
+            "report %s ready (%s / %s), сохранён: %s", job_id, brand, month["label"], stored
+        )
     except Exception:
         # Наружу — общее сообщение: текст исключения может содержать внутренние детали
         # (адреса, куски ответов API). Подробности остаются в логе сервера.
@@ -298,6 +304,71 @@ async def download_report(job_id: str) -> Response:
         media_type="text/html; charset=utf-8",
         headers={"Content-Disposition": f"attachment; filename*=UTF-8''{_url_quote(name)}"},
     )
+
+
+@app.get("/reports", response_class=HTMLResponse)
+async def reports_index() -> HTMLResponse:
+    if not storage.configured():
+        return HTMLResponse(
+            render_reports_page(
+                [],
+                note="Хранение отчётов не настроено: на сервере нет SUPABASE_URL и "
+                "SUPABASE_SERVICE_KEY. Отчёты собираются, но не сохраняются — "
+                "скачивайте HTML сразу.",
+            )
+        )
+    try:
+        rows = await storage.list_reports()
+    except Exception:
+        logger.exception("не удалось получить список отчётов")
+        return HTMLResponse(
+            render_reports_page([], note="Хранилище не ответило. Подробности в логах сервера."),
+            status_code=502,
+        )
+    return HTMLResponse(render_reports_page(rows))
+
+
+async def _stored_report(report_id: str) -> tuple[str, dict]:
+    if not storage.configured():
+        raise HTTPException(503, "Хранение отчётов не настроено.")
+    try:
+        found = await storage.get_report_html(report_id)
+    except Exception as exc:
+        logger.exception("не удалось прочитать отчёт %s", report_id)
+        raise HTTPException(502, "Хранилище не ответило.") from exc
+    if not found:
+        raise HTTPException(404, "Такого отчёта нет — возможно, он был удалён.")
+    return found
+
+
+@app.get("/reports/{report_id}", response_class=HTMLResponse)
+async def stored_report_view(report_id: str) -> HTMLResponse:
+    html, _ = await _stored_report(report_id)
+    return HTMLResponse(html)
+
+
+@app.get("/reports/{report_id}/download")
+async def stored_report_download(report_id: str) -> Response:
+    html, meta = await _stored_report(report_id)
+    name = _safe_filename(f"ПБА_{meta.get('brand') or ''}_{meta.get('month') or ''}.html")
+    return Response(
+        content=html.encode("utf-8"),
+        media_type="text/html; charset=utf-8",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{_url_quote(name)}"},
+    )
+
+
+@app.post("/reports/{report_id}/delete")
+async def stored_report_delete(report_id: str) -> Response:
+    if not storage.configured():
+        raise HTTPException(503, "Хранение отчётов не настроено.")
+    try:
+        await storage.delete_report(report_id)
+    except Exception as exc:
+        logger.exception("не удалось удалить отчёт %s", report_id)
+        raise HTTPException(502, "Хранилище не ответило.") from exc
+    # 303 — чтобы браузер после POST сделал обычный GET списка и не переспрашивал.
+    return Response(status_code=303, headers={"Location": "/reports"})
 
 
 def _safe_filename(name: str) -> str:

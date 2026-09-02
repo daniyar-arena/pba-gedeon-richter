@@ -936,11 +936,19 @@ def render_report(report: dict, *, job_id: str | None = None) -> str:
     client = report.get("client") or ""
     period = month["meta"].get("period") or ""
 
+    stored = report.get("stored")
+    stored_note = (
+        "Отчёт сохранён — останется доступен в «Моих отчётах» после перезапуска сайта."
+        if stored
+        else "Этот отчёт не сохранён на сервере: скачайте HTML, иначе ссылка пропадёт "
+        "после перезапуска."
+    )
     toolbar = (
         f'''<div class="toolbar">
               <a class="btn primary" href="/api/report/{job_id}/download">Скачать HTML</a>
+              <a class="btn" href="/reports">Мои отчёты</a>
               <a class="btn" href="/">Собрать другой отчёт</a>
-              <span class="muted small">Скачанный файл автономный: открывается без сервера, можно отправить клиенту.</span>
+              <span class="muted small">{esc(stored_note)}</span>
             </div>'''
         if job_id
         else ""
