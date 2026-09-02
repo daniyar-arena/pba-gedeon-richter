@@ -22,6 +22,10 @@ if errorlevel 1 (
 
 if not exist ".env" copy ".env.example" ".env" >nul
 
+rem Lokalnyj zapusk: parol ne sprashivaem. Na hostinge etoj peremennoj net,
+rem poetomu tam parol obyazatelen (sm. app/security.py).
+set "PBA_LOCAL=1"
+
 echo.
 echo   PBA Gedeon Richter
 echo   Site: http://127.0.0.1:8765

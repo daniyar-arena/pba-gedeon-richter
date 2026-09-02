@@ -56,10 +56,9 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 async def guard(request, call_next):
     """Пароль на весь сайт, включая просмотр и скачивание отчётов: в них бюджеты клиента.
     Локальный запуск пароля не требует, чтобы start.bat на своей машине работал как раньше."""
-    client_host = request.client.host if request.client else None
     # /healthz дёргает сам хостинг снаружи — за паролем он получал бы 401 и считал
     # сервис нерабочим. Эта ручка отдаёт только «живой», без статуса ключей.
-    if request.url.path != "/healthz" and not security.is_local(client_host):
+    if request.url.path != "/healthz" and not security.local_mode():
         if not security.credentials_configured():
             return JSONResponse(
                 {"detail": "Сайт не настроен: на хостинге не задан PBA_PASSWORD."},
@@ -189,7 +188,7 @@ async def upload(file: UploadFile = File(...)) -> JSONResponse:
 @app.post("/api/report")
 async def create_report(req: ReportRequest, request: Request) -> JSONResponse:
     client_host = request.client.host if request.client else "unknown"
-    if not security.is_local(client_host) and not security.report_limiter.allow(client_host):
+    if not security.local_mode() and not security.report_limiter.allow(client_host):
         wait = security.report_limiter.retry_after_seconds(client_host)
         raise HTTPException(
             429,

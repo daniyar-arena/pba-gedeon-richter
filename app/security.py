@@ -18,7 +18,6 @@ import time
 from collections import deque
 
 REALM = "PBA Gedeon Richter"
-LOCAL_HOSTS = {"127.0.0.1", "::1", "localhost", "testclient"}
 
 # Сколько сборок отчёта разрешаем с одного адреса в час. Восемь ключей на прогон —
 # это ~$0.10, то есть потолок примерно $2 в час на адрес.
@@ -55,8 +54,11 @@ class RateLimiter:
 report_limiter = RateLimiter(REPORTS_PER_HOUR)
 
 
-def is_local(client_host: str | None) -> bool:
-    return (client_host or "") in LOCAL_HOSTS
+def local_mode() -> bool:
+    """Признак локального запуска берём из переменной окружения, которую ставит start.bat,
+    а не из IP клиента: за прокси хостинга адрес бывает внутренним, и «локальным» мог бы
+    оказаться запрос из интернета. Нет переменной — значит хостинг, пароль обязателен."""
+    return os.getenv("PBA_LOCAL", "").strip().lower() in ("1", "true", "yes")
 
 
 def credentials_configured() -> bool:
