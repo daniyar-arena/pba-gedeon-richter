@@ -459,9 +459,20 @@ def _delta_badge(value, threshold: float = 0.02) -> str:
     return f'<span class="badge {cls}">{pct(value)}</span>'
 
 
-def _placement_bars(rows: list[dict], total_fact: float) -> str:
-    """Горизонтальные бары «план vs факт» по бюджету. Структура расхода и промахи
-    видны раньше, чем читаются цифры — таблица ниже нужна для точных значений."""
+def _month_rows(month: dict) -> tuple[list[dict], dict | None]:
+    """Строки месячной таблицы. Берём блок «тотал» — это месяц глазами медиаплана,
+    ровно та разбивка, которую видит клиент. Если его в файле нет, собираем сами
+    из закрытых недель."""
+    block = month.get("month_total")
+    if block and block["rows"]:
+        rows = sorted(block["rows"], key=lambda r: -(r["budget_plan"] or 0))
+        return rows, block["total"]
+    return month["by_placement_closed"], None
+
+
+def _budget_bars(rows: list[dict], total_fact: float, show_pct: bool) -> str:
+    """Горизонтальные бары «план vs факт» по бюджету: структура расхода и промахи
+    видны раньше, чем читаются цифры."""
     max_v = max(max(r["budget_plan"] or 0, r["budget_fact"] or 0) for r in rows) or 1
 
     lines = []
@@ -483,6 +494,7 @@ def _placement_bars(rows: list[dict], total_fact: float) -> str:
                 f'<span class="bar-tag">{money(fact)}</span></div>'
             )
 
+        delta = _delta_badge(r["budget_pct"]) if show_pct else ""
         share_html = f'<span class="bar-share">доля {share * 100:.0f}%</span>' if share else ""
         lines.append(
             '<div class="bar-row">'
@@ -496,7 +508,7 @@ def _placement_bars(rows: list[dict], total_fact: float) -> str:
             f'<span class="bar-tag muted">{money(plan)}</span></div>'
             f"{fact_line}"
             "</div>"
-            f'<div class="bar-delta">{_delta_badge(r["budget_pct"])}{share_html}</div>'
+            f'<div class="bar-delta">{delta}{share_html}</div>'
             "</div>"
         )
 
@@ -510,210 +522,134 @@ def _placement_bars(rows: list[dict], total_fact: float) -> str:
     return legend + f'<div class="bars">{"".join(lines)}</div>'
 
 
-def _placement_table(rows: list[dict], total_plan: float, total_fact: float) -> str:
-    """Компактная таблица: план уже виден на барах, здесь факт, доля и отклонения."""
+def _month_table(rows: list[dict], total: dict | None, show_pct: bool) -> str:
+    """Полная таблица месяца: план, факт и отклонение по KPI, бюджету и цене единицы."""
+
+    def cells(r: dict) -> str:
+        kpi = (
+            f'<td class="num">{num(r["kpi_plan"])}</td>'
+            f'<td class="num">{num(r["kpi_fact"])}</td>'
+            f'<td class="num">{_delta_badge(r["kpi_pct"]) if show_pct else "—"}</td>'
+        )
+        budget = (
+            f'<td class="num">{money(r["budget_plan"])}</td>'
+            f'<td class="num">{money(r["budget_fact"])}</td>'
+            f'<td class="num">{_delta_badge(r["budget_pct"]) if show_pct else "—"}</td>'
+        )
+        unit = (
+            f'<td class="num">{num(r.get("unit_cost_plan"), 2)}</td>'
+            f'<td class="num">{num(r.get("unit_cost_fact"), 2)}</td>'
+            f'<td class="num">{_delta_badge(r.get("unit_cost_pct")) if show_pct else "—"}</td>'
+        )
+        return kpi + budget + unit
+
     body = []
     for r in rows:
-        plan = r["budget_plan"] or 0
-        fact = r["budget_fact"] or 0
-        share = fact / total_fact if total_fact else None
-        if plan > 0 and fact == 0:
-            budget_cell = '<td class="num warn-text">не стартовало</td><td class="num muted">—</td>'
-        else:
-            share_text = f"{share * 100:.0f}%" if share else "—"
-            budget_cell = (
-                f'<td class="num">{money(fact)}</td>'
-                f'<td class="num muted">{share_text}</td>'
-            )
         body.append(
             "<tr>"
             f'<td><span class="cell-main">{esc(r["platform"])}</span>'
             f'<span class="cell-sub">{esc(r["format"])}</span></td>'
             f'<td class="muted">{esc(r["buy_model"])}</td>'
-            f"{budget_cell}"
-            f'<td class="num">{_delta_badge(r["budget_pct"])}</td>'
-            f'<td class="num">{num(r["kpi_fact"])}</td>'
-            f'<td class="num">{_delta_badge(r["kpi_pct"])}</td>'
-            f'<td class="num">{num(r["unit_cost_fact"], 2)}</td>'
-            f'<td class="num">{_delta_badge(r["unit_cost_pct"])}</td>'
-            "</tr>"
+            f"{cells(r)}</tr>"
         )
 
-    total_pct = (total_fact - total_plan) / total_plan if total_plan else None
-    total_row = (
-        '<tr class="total-row"><td colspan="2">Всего по закрытым неделям</td>'
-        f'<td class="num">{money(total_fact)}</td><td class="num muted">100%</td>'
-        f'<td class="num">{_delta_badge(total_pct)}</td>'
-        '<td class="num muted">—</td><td class="num muted">—</td>'
-        '<td class="num muted">—</td><td class="num muted">—</td></tr>'
-    )
+    if total:
+        total_row = (
+            '<tr class="total-row"><td colspan="2">Всего за месяц</td>'
+            f'<td class="num">{num(total["kpi_plan"])}</td>'
+            f'<td class="num">{num(total["kpi_fact"])}</td>'
+            f'<td class="num">{_delta_badge(total["kpi_pct"]) if show_pct else "—"}</td>'
+            f'<td class="num">{money(total["budget_plan"])}</td>'
+            f'<td class="num">{money(total["budget_fact"])}</td>'
+            f'<td class="num">{_delta_badge(total["budget_pct"]) if show_pct else "—"}</td>'
+            '<td class="num muted">—</td><td class="num muted">—</td>'
+            '<td class="num muted">—</td></tr>'
+        )
+    else:
+        total_row = ""
 
-    # Двухъярусная шапка: иначе три колонки «к плану» подряд читаются неоднозначно.
     head = (
         "<thead>"
         '<tr><th rowspan="2">Площадка</th><th rowspan="2">Закупка</th>'
-        '<th colspan="3">Бюджет с НДС и АК</th>'
-        '<th colspan="2">KPI</th>'
-        '<th colspan="2">Цена единицы</th></tr>'
-        '<tr><th class="num">факт</th><th class="num">доля</th><th class="num">к плану</th>'
-        '<th class="num">факт</th><th class="num">к плану</th>'
-        '<th class="num">факт</th><th class="num">к плану</th></tr>'
+        '<th colspan="3">KPI</th><th colspan="3">Бюджет с НДС и АК</th>'
+        '<th colspan="3">Цена единицы</th></tr>'
+        '<tr><th class="num">план</th><th class="num">факт</th><th class="num">%</th>'
+        '<th class="num">план</th><th class="num">факт</th><th class="num">%</th>'
+        '<th class="num">план</th><th class="num">факт</th><th class="num">%</th></tr>'
         "</thead>"
     )
     return (
         '<div class="table-wrap"><table class="compact">'
-        f'{head}<tbody>{"".join(body)}{total_row}</tbody>'
-        "</table></div>"
+        f'{head}<tbody>{"".join(body)}{total_row}</tbody></table></div>'
     )
-
-
-def render_placements(rows: list[dict]) -> str:
-    if not rows:
-        return '<p class="muted">Закрытых недель нет — сводить факт по площадкам пока не на чем.</p>'
-    total_plan = sum(r["budget_plan"] or 0 for r in rows)
-    total_fact = sum(r["budget_fact"] or 0 for r in rows)
-    return _placement_bars(rows, total_fact) + _placement_table(rows, total_plan, total_fact)
-
-
-def _week_table(week: dict, is_closed: bool) -> str:
-    body = []
-    for r in week["rows"]:
-        if is_closed and r["kpi_fact"] is not None:
-            kpi = (
-                f'<td class="num">{num(r["kpi_plan"])}</td>'
-                f'<td class="num">{num(r["kpi_fact"])}</td>'
-                f'<td class="num {pct_class(r["kpi_pct"])}">{pct(r["kpi_pct"])}</td>'
-            )
-            budget = (
-                f'<td class="num">{money(r["budget_plan"])}</td>'
-                f'<td class="num">{money(r["budget_fact"])}</td>'
-                f'<td class="num {pct_class(r["budget_pct"])}">{pct(r["budget_pct"])}</td>'
-            )
-        else:
-            kpi = (
-                f'<td class="num">{num(r["kpi_plan"])}</td>'
-                '<td class="num muted">нет данных</td><td class="num muted">—</td>'
-            )
-            budget = (
-                f'<td class="num">{money(r["budget_plan"])}</td>'
-                '<td class="num muted">нет данных</td><td class="num muted">—</td>'
-            )
-        body.append(
-            f'<tr><td>{esc(r["platform"])}</td><td>{esc(r["format"])}</td>'
-            f'<td class="muted">{esc(r["buy_model"])}</td>{kpi}{budget}</tr>'
-        )
-
-    total = week["total"]
-    if is_closed:
-        total_row = (
-            f'<tr class="total-row"><td colspan="3">Всего</td>'
-            f'<td class="num">{num(total["kpi_plan"])}</td>'
-            f'<td class="num">{num(total["kpi_fact"])}</td>'
-            f'<td class="num {pct_class(total["kpi_pct"])}">{pct(total["kpi_pct"])}</td>'
-            f'<td class="num">{money(total["budget_plan"])}</td>'
-            f'<td class="num">{money(total["budget_fact"])}</td>'
-            f'<td class="num {pct_class(total["budget_pct"])}">{pct(total["budget_pct"])}</td></tr>'
-        )
-    else:
-        total_row = (
-            f'<tr class="total-row"><td colspan="3">Всего</td>'
-            f'<td class="num">{num(total["kpi_plan"])}</td>'
-            '<td class="num muted">—</td><td class="num muted">—</td>'
-            f'<td class="num">{money(total["budget_plan"])}</td>'
-            '<td class="num muted">—</td><td class="num muted">—</td></tr>'
-        )
-
-    badge = (
-        '<span class="status-badge"><span class="status-dot live"></span>неделя закрыта</span>'
-        if is_closed
-        else '<span class="status-badge"><span class="status-dot demo"></span>неделя не завершена</span>'
-    )
-    return f'''
-    <div class="week-block">
-      <div class="section-head">
-        <h3>{esc(week["label"])} <span class="date-range">{esc(week["date_range"] or "")}</span></h3>
-        {badge}
-      </div>
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr><th rowspan="2">Платформа</th><th rowspan="2">Формат</th><th rowspan="2">Закупка</th>
-              <th colspan="3">KPI</th><th colspan="3">Бюджет с НДС и АК</th></tr>
-            <tr><th class="num">план</th><th class="num">факт</th><th class="num">%</th>
-              <th class="num">план</th><th class="num">факт</th><th class="num">%</th></tr>
-          </thead>
-          <tbody>{"".join(body)}{total_row}</tbody>
-        </table>
-      </div>
-    </div>'''
 
 
 def render_pba(month: dict) -> str:
     s = month["summary"]
+    pending = month["pending_week_numbers"]
     closed = ", ".join(str(n) for n in month["closed_week_numbers"]) or "нет"
-    pending = ", ".join(str(n) for n in month["pending_week_numbers"]) or "нет"
+    pending_labels = ", ".join(str(n) for n in pending) or "нет"
+
+    # Процент показываем только когда месяц отчитан целиком: в блоке «тотал» план стоит
+    # на весь месяц, а факт приходит по отчитанным неделям, и на неполном месяце
+    # отклонение читалось бы как недоосвоение, которого нет.
+    show_pct = not pending
+    rows, total = _month_rows(month)
+
     delivery = s["delivery_pct"]
     delivery_class = (
         "" if delivery is None or abs(delivery - 1) <= 0.02 else ("neg" if delivery < 1 else "pos")
     )
 
-    if month["pending_week_numbers"]:
-        callout_text = (
-            f"Закрыты (есть факт): <strong>недели {esc(closed)}</strong>. "
-            f"Не завершены или не отчитаны: <strong>недели {esc(pending)}</strong> — "
-            "по ним показан только план. Процент от плана по месяцу целиком сейчас ничего "
-            "не говорит: часть бюджета просто ещё не наступила. Реальный темп — "
-            "по закрытым неделям."
-        )
-        pending_tile = (
-            '<div class="stat-tile"><div class="label">Осталось по плану</div>'
-            f'<div class="value">{money(s["plan_pending"])}</div>'
-            f'<div class="delta">недели {esc(pending)}</div></div>'
+    if pending:
+        callout = (
+            f"Месяц отчитан частично: факт есть по неделям <strong>{esc(closed)}</strong>, "
+            f"недели <strong>{esc(pending_labels)}</strong> ещё не отчитаны. "
+            "Поэтому в таблице показаны план на весь месяц и факт по отчитанным неделям, "
+            "а проценты отклонения не выводятся — на неполном факте они читались бы "
+            "как недоосвоение, которого нет. Реальный темп — в плитке «выполнение "
+            "по закрытым неделям»."
         )
     else:
-        callout_text = (
+        callout = (
             f"Месяц отчитан полностью: закрыты все {s['total_weeks']} "
-            f"{weeks_word(s['total_weeks'])}, факт есть по каждой. "
-            "Выполнение ниже — по всему месяцу."
+            f"{weeks_word(s['total_weeks'])}, факт есть по каждой."
         )
-        pending_tile = ""
 
-    weeks_html = "".join(
-        _week_table(w, w["week_number"] in month["closed_week_numbers"]) for w in month["weeks"]
-    )
-    placement_html = render_placements(month["by_placement_closed"])
+    tiles = [
+        '<div class="stat-tile"><div class="label">План на месяц</div>'
+        f'<div class="value">{money(s["plan_month"])}</div>'
+        f'<div class="delta">все {s["total_weeks"]} {weeks_word(s["total_weeks"])}</div></div>',
+        '<div class="stat-tile"><div class="label">Факт</div>'
+        f'<div class="value">{money(s["fact_closed"])}</div>'
+        f'<div class="delta">по закрытым неделям: {esc(closed)}</div></div>',
+        '<div class="stat-tile"><div class="label">Выполнение по закрытым неделям</div>'
+        f'<div class="value {delivery_class}">'
+        f'{"—" if delivery is None else f"{delivery * 100:.1f}%"}</div>'
+        f'<div class="delta">{s["closed_weeks"]} из {s["total_weeks"]} недель</div></div>',
+    ]
+    if pending:
+        tiles.append(
+            '<div class="stat-tile"><div class="label">Осталось по плану</div>'
+            f'<div class="value">{money(s["plan_pending"])}</div>'
+            f'<div class="delta">недели {esc(pending_labels)}</div></div>'
+        )
 
+    total_fact = sum(r["budget_fact"] or 0 for r in rows)
     return f'''
     <section class="card section">
       <div class="section-head"><h2>ПБА — {esc(month["label"])}</h2></div>
-      <div class="callout">{callout_text}</div>
-      <div class="stats-row">
-        <div class="stat-tile">
-          <div class="label">План на месяц</div>
-          <div class="value">{money(s["plan_month"])}</div>
-          <div class="delta">все {s["total_weeks"]} {weeks_word(s["total_weeks"])}</div>
-        </div>
-        <div class="stat-tile">
-          <div class="label">Факт по закрытым неделям</div>
-          <div class="value">{money(s["fact_closed"])}</div>
-          <div class="delta">план на эти недели: {money(s["plan_closed"])}</div>
-        </div>
-        <div class="stat-tile">
-          <div class="label">Выполнение по закрытым неделям</div>
-          <div class="value {delivery_class}">{"—" if delivery is None else f"{delivery * 100:.1f}%"}</div>
-          <div class="delta">{s["closed_weeks"]} из {s["total_weeks"]} недель</div>
-        </div>
-        {pending_tile}
-      </div>
+      <div class="callout">{callout}</div>
+      <div class="stats-row">{"".join(tiles)}</div>
 
-      <div class="sub-head">Сводно по площадкам — только закрытые недели</div>
-      <p class="muted small">KPI суммируется внутри одной модели закупки: просмотры, показы
-      и клики между собой не складываются. Цена единицы — бюджет с НДС и АК на 1000 показов
-      (CPM) или на просмотр/клик (CPV, CPC).</p>
-      {placement_html}
+      <div class="sub-head">Бюджет по площадкам</div>
+      {_budget_bars(rows, total_fact, show_pct)}
 
-      <div class="sub-head">По неделям</div>
-      {weeks_html}
+      <div class="sub-head">Полная таблица месяца</div>
+      <p class="muted small">KPI считается в единицах своей модели закупки: CPV — просмотры,
+      CPM — показы, CPC — клики. Цена единицы — бюджет с НДС и АК на 1000 показов (CPM)
+      или на просмотр либо клик (CPV, CPC).</p>
+      {_month_table(rows, total, show_pct)}
     </section>'''
 
 

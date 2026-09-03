@@ -66,7 +66,7 @@ def _row_dict(row) -> dict:
     kpi_fact = _num(row[COL_KPI_FACT])
     budget_plan = _num(row[COL_BUDGET_PLAN])
     budget_fact = _num(row[COL_BUDGET_FACT])
-    return {
+    row_dict = {
         "platform": _text(row[COL_PLATFORM]),
         "format": _text(row[COL_FORMAT]),
         "buy_model": _text(row[COL_BUY_MODEL]),
@@ -78,7 +78,15 @@ def _row_dict(row) -> dict:
         "budget_pct": (budget_fact - budget_plan) / budget_plan
         if budget_plan and budget_fact is not None
         else None,
+        "unit_cost_plan": _unit_cost(_text(row[COL_BUY_MODEL]), budget_plan, kpi_plan),
+        "unit_cost_fact": _unit_cost(_text(row[COL_BUY_MODEL]), budget_fact, kpi_fact),
     }
+    row_dict["unit_cost_pct"] = (
+        (row_dict["unit_cost_fact"] - row_dict["unit_cost_plan"]) / row_dict["unit_cost_plan"]
+        if row_dict["unit_cost_plan"] and row_dict["unit_cost_fact"] is not None
+        else None
+    )
+    return row_dict
 
 
 def _parse_meta(rows: list[tuple]) -> dict:
