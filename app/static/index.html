@@ -192,11 +192,13 @@
       словам возьмём из выбранного отчёта. Список ключей выше в этом случае не используется —
       придут ровно те же ключи, что были в том прогоне.</p>
     <div class="geo-row">
-      <label for="demand-file">…или из скачанного отчёта:</label>
-      <input type="file" id="demand-file" accept=".html,.htm" style="display:inline-block;width:auto">
+      <label for="demand-file">…или из файла:</label>
+      <input type="file" id="demand-file" accept=".html,.htm,.json,text/html,application/json"
+             style="display:inline-block;width:auto">
     </div>
-    <p class="hint">Пригодится, если прошлый прогон не сохранился на сервере: подойдёт любой
-      HTML-отчёт, скачанный кнопкой «Скачать HTML» — данные по ключам достанутся из него.</p>
+    <p class="hint">Пригодится, если прошлый прогон не сохранился на сервере. Подойдёт
+      HTML-отчёт, скачанный кнопкой «Скачать HTML», или json с данными по ключевым словам —
+      из любого из них данные достанутся без обращения к Google.</p>
     <div id="demand-file-status"></div>
     <div class="geo-row">
       <label for="geo">Гео для Google:</label>
