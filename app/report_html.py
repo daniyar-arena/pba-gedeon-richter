@@ -201,13 +201,11 @@ def render_ai(ai: dict) -> str:
     )
     recs = "".join(f"<li>{esc(r)}</li>" for r in ai.get("recommendations", []))
     recs_block = f'<div class="sub-head">Что делать дальше</div><ul class="recs">{recs}</ul>' if recs else ""
-    badge_class = "demo" if ai.get("is_fallback") else "live"
 
     return f'''
     <section class="card section">
       <div class="section-head">
         <h2>Выводы</h2>
-        <span class="status-badge"><span class="status-dot {badge_class}"></span>{esc(ai.get("source"))}</span>
       </div>
       <p class="headline">{esc(ai.get("headline"))}</p>
       {obs}
@@ -451,18 +449,9 @@ def render_demand(demand: dict) -> str:
         )
 
     body = "".join(s for s in sections if s)
-    # Пометка о переиспользовании — строкой в сноске, а не отдельной врезкой: данные
-    # настоящие, просто из прошлого замера, и предупреждать о них нечего.
-    reused = demand.get("reused_note")
-    disclaimer = (
-        '<p class="footer-note">'
-        + (esc(reused) + " " if reused else "")
-        + "Источник — Google Keyword Planner: показывает спрос в Google,"
-        " не весь рынок. Хвост последних месяцев обрезается, если Google отдал по ним нули"
-        " (отчётная задержка, а не падение спроса). По кириллическим запросам Keyword Planner"
-        " уже путал объёмы бренда и категории — расстановку сил стоит перепроверять по Wordstat.</p>"
-    )
-    return note + body + disclaimer
+    # Методические оговорки из отчёта убраны: он уходит клиенту. Источник данных всё
+    # равно назван в шапке каждого блока спроса («Google Keyword Planner, гео: KZ»).
+    return note + body
 
 
 def _delta_badge(value, threshold: float = 0.02) -> str:
@@ -672,21 +661,6 @@ def render_pba(month: dict) -> str:
         "" if delivery is None or abs(delivery - 1) <= 0.02 else ("neg" if delivery < 1 else "pos")
     )
 
-    if pending:
-        callout = (
-            f"Месяц отчитан частично: факт есть по неделям <strong>{esc(closed)}</strong>, "
-            f"недели <strong>{esc(pending_labels)}</strong> ещё не отчитаны. "
-            "Таблица ниже — <strong>по отчитанным неделям</strong>: и план, и факт взяты "
-            "за один и тот же период, поэтому проценты в ней настоящие. Сравнивать факт "
-            "с планом на весь месяц нельзя — вышло бы недоосвоение, которого нет; "
-            "общий план месяца показан отдельной плиткой."
-        )
-    else:
-        callout = (
-            f"Месяц отчитан полностью: закрыты все {s['total_weeks']} "
-            f"{weeks_word(s['total_weeks'])}, факт есть по каждой."
-        )
-
     tiles = [
         '<div class="stat-tile"><div class="label">План на месяц</div>'
         f'<div class="value">{money(s["plan_month"])}</div>'
@@ -710,7 +684,6 @@ def render_pba(month: dict) -> str:
     return f'''
     <section class="card section">
       <div class="section-head"><h2>ПБА — {esc(month["label"])}</h2></div>
-      <div class="callout">{callout}</div>
       <div class="stats-row">{"".join(tiles)}</div>
 
       <div class="sub-head">Бюджет по площадкам</div>
@@ -982,12 +955,7 @@ def render_report(report: dict, *, job_id: str | None = None) -> str:
   {render_pba(month)}
   {render_demand(report["demand"])}
 
-  <p class="footer-note">
-    Бюджеты — тенге с НДС и агентской комиссией, как в исходном файле ПБА.
-    Факт берётся только из тех недель, где он заполнен; недели без факта помечены и в
-    расчёт выполнения не входят. Данные по спросу — внешний источник, помечен в своём блоке.
-    Исполнитель: ТОО «Arena Media Kazakhstan».
-  </p>
+  <p class="footer-note">Исполнитель: ТОО «Arena Media Kazakhstan».</p>
 </div>
 </body>
 </html>'''
