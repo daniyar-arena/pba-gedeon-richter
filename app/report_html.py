@@ -273,11 +273,15 @@ def _volume_bars(items: list[dict], kind: str) -> str:
 
 
 def _trend_grid(items: list[dict], kind: str) -> str:
-    """По одному графику на каждое ключевое слово — включая те, по которым Google не дал
-    разбивки по месяцам: вместо пропавшего графика показываем, что данных нет, иначе
-    непонятно, куда делся ключ."""
-    charts = []
+    """Графики рисуем только там, где есть помесячные данные. Ключи без динамики
+    не занимают место пустой карточкой — их объёмы видны барами выше, а сами они
+    перечислены сноской: так видно, что ключ не потерялся, и нет ощущения поломки."""
+    charts, without_trend = [], []
     for item in items:
+        if not item["trend"]:
+            without_trend.append(item)
+            continue
+
         color = (
             BRAND_COLOR
             if item["role"] == "brand"
@@ -290,23 +294,28 @@ def _trend_grid(items: list[dict], kind: str) -> str:
             if item["volume"] is not None
             else '<span class="chart-volume muted">нет данных</span>'
         )
-        title = (
+        charts.append(
+            '<div class="chart-block">'
             f'<div class="chart-title"><span class="swatch" style="background:{color}"></span>'
             f'<span class="chart-name">{esc(item["label"])}</span>{volume}</div>'
+            f"{bar_chart(item['trend'], color, width=600, height=190, font=13)}"
+            "</div>"
         )
-        if item["trend"]:
-            body = bar_chart(item["trend"], color, width=600, height=190, font=13)
-        else:
-            reason = f' ({esc(item["error"])})' if item["error"] else ""
-            body = (
-                '<p class="muted small chart-empty">Google не дал разбивку по месяцам'
-                f"{reason}.</p>"
-            )
-        charts.append(f'<div class="chart-block">{title}{body}</div>')
 
-    if not charts:
-        return ""
-    return f'<div class="charts-grid">{"".join(charts)}</div>'
+    grid = f'<div class="charts-grid">{"".join(charts)}</div>' if charts else ""
+
+    if not without_trend:
+        return grid
+
+    names = ", ".join(esc(i["label"]) for i in without_trend)
+    reasons = {i["error"] for i in without_trend if i["error"]}
+    reason = f" Причина: {esc(sorted(reasons)[0])}." if len(reasons) == 1 else ""
+    note = (
+        f'<p class="footer-note">Помесячной динамики нет по {len(without_trend)} '
+        f"{'запросу' if len(without_trend) == 1 else 'запросам'}: {names}. "
+        f"Их объёмы показаны в списке выше.{reason}</p>"
+    )
+    return grid + note
 
 
 def _demand_header(demand: dict, title: str) -> str:
