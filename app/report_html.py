@@ -451,8 +451,13 @@ def render_demand(demand: dict) -> str:
         )
 
     body = "".join(s for s in sections if s)
+    # Пометка о переиспользовании — строкой в сноске, а не отдельной врезкой: данные
+    # настоящие, просто из прошлого замера, и предупреждать о них нечего.
+    reused = demand.get("reused_note")
     disclaimer = (
-        '<p class="footer-note">Источник — Google Keyword Planner: показывает спрос в Google,'
+        '<p class="footer-note">'
+        + (esc(reused) + " " if reused else "")
+        + "Источник — Google Keyword Planner: показывает спрос в Google,"
         " не весь рынок. Хвост последних месяцев обрезается, если Google отдал по ним нули"
         " (отчётная задержка, а не падение спроса). По кириллическим запросам Keyword Planner"
         " уже путал объёмы бренда и категории — расстановку сил стоит перепроверять по Wordstat.</p>"

@@ -335,10 +335,10 @@ async def _run_job(job_id: str, upload: dict, month: dict, req: ReportRequest) -
 
         if reused_demand:
             demand = dict(reused_demand)
-            demand["note"] = (
-                f"Данные по ключевым словам взяты из прошлого отчёта ({reuse_note}), "
-                "повторный запрос в Google не делался."
-            )
+            # Жёлтая врезка тут была бы предупреждением на ровном месте: данные настоящие,
+            # просто из прошлого замера. Оставляем строкой в сноске под блоком.
+            demand["note"] = None
+            demand["reused_note"] = f"Данные по ключевым словам — из прошлого замера ({reuse_note})."
             logger.info("job %s: спрос переиспользован (%s)", job_id, reuse_note)
         elif req.reuse_from:
             demand = {
