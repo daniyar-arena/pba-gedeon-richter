@@ -197,19 +197,49 @@ async def upload_demand(file: UploadFile = File(...)) -> JSONResponse:
     """Принимает ранее скачанный HTML-отчёт и достаёт из него данные по ключевым словам.
     Нужен, когда прошлый прогон не сохранился на сервере, а платить за Google заново
     нельзя или не хочется."""
-    if not (file.filename or "").lower().endswith((".html", ".htm")):
-        raise HTTPException(400, "Нужен HTML-файл отчёта — тот, что скачивается кнопкой «Скачать HTML».")
+    name = (file.filename or "").lower()
+    if not name.endswith((".html", ".htm", ".json")):
+        raise HTTPException(
+            400,
+            "Нужен HTML-отчёт (кнопка «Скачать HTML») или json с данными по ключевым словам.",
+        )
 
     payload = await file.read()
     if len(payload) > MAX_UPLOAD_BYTES:
         raise HTTPException(400, "Файл больше 20 МБ — это не похоже на отчёт.")
 
     try:
-        html = payload.decode("utf-8")
+        text = payload.decode("utf-8")
     except UnicodeDecodeError:
         raise HTTPException(400, "Файл не читается как текст — это точно отчёт с сайта?") from None
 
-    demand = recover_demand(html)
+    if name.endswith(".json"):
+        # json с готовыми данными по ключам: пригодится, когда отчёта на руках нет,
+        # а сами замеры есть.
+        import json as json_lib
+
+        try:
+            parsed = json_lib.loads(text)
+        except ValueError:
+            raise HTTPException(400, "Файл не разбирается как json.") from None
+        items = parsed.get("items") if isinstance(parsed, dict) else parsed
+        if not isinstance(items, list) or not items:
+            raise HTTPException(400, "В json нет списка items с ключевыми словами.")
+        from app.search_demand import _groups
+
+        demand = {
+            "source": (parsed.get("source") if isinstance(parsed, dict) else None)
+            or "Google Keyword Planner (через Apify)",
+            "geo": (parsed.get("geo") if isinstance(parsed, dict) else None) or "KZ",
+            "note": None,
+            "items": items,
+            "reused": True,
+        }
+        demand["available"] = any(i.get("volume") is not None for i in items)
+        demand["groups"] = _groups(items)
+    else:
+        demand = recover_demand(text)
+
     if not demand:
         raise HTTPException(
             400,
