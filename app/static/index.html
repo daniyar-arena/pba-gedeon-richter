@@ -183,6 +183,15 @@
   <div class="card disabled" id="card-build">
     <div class="step"><span class="step-num">4</span><h2>Собрать отчёт</h2></div>
     <div class="geo-row">
+      <label for="reuse">Данные по ключевым словам:</label>
+      <select id="reuse" style="width:auto;min-width:320px">
+        <option value="">запросить в Google заново (платно)</option>
+      </select>
+    </div>
+    <p class="hint" id="reuse-note" hidden>Google запрашиваться не будет: данные по ключевым
+      словам возьмём из выбранного отчёта. Список ключей выше в этом случае не используется —
+      придут ровно те же ключи, что были в том прогоне.</p>
+    <div class="geo-row">
       <label for="geo">Гео для Google:</label>
       <select id="geo"></select>
     </div>
@@ -407,6 +416,34 @@ async function loadHealth() {
 }
 loadHealth();
 
+// ---------- переиспользование данных по ключевым словам ----------
+// Прогон в Google платный, поэтому при правке ПБА логично взять готовые данные
+// из прошлого отчёта, а не платить второй раз за те же ключи.
+async function loadReusable() {
+  try {
+    const reports = await (await fetch("/api/reports")).json();
+    const sel = $("reuse");
+    reports.forEach(r => {
+      const when = r.created_at ? new Date(r.created_at).toLocaleString("ru-RU",
+        { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "";
+      const opt = document.createElement("option");
+      opt.value = r.id;
+      opt.textContent = `взять из: ${r.brand || "—"} · ${r.month || "—"} · ${when}`;
+      sel.appendChild(opt);
+    });
+  } catch (err) {
+    console.warn("не удалось получить список отчётов", err);
+  }
+}
+loadReusable();
+
+$("reuse").addEventListener("change", () => {
+  const reusing = Boolean($("reuse").value);
+  $("reuse-note").hidden = !reusing;
+  $("use-google").disabled = reusing;
+  $("card-keywords").classList.toggle("disabled", reusing);
+});
+
 $("build").addEventListener("click", async () => {
   if (!state.upload || !state.sheet) {
     setStatus($("build-status"), "Сначала загрузите файл и выберите месяц.", "err");
@@ -415,7 +452,9 @@ $("build").addEventListener("click", async () => {
   const btn = $("build");
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner"></span> Собираю…';
-  setStatus($("build-status"), "Считаю ПБА, запрашиваю спрос и выводы. Google отвечает до минуты.", "info");
+  setStatus($("build-status"), $("reuse").value
+    ? "Считаю ПБА и выводы. Google не запрашиваем — данные по ключам берём из прошлого отчёта."
+    : "Считаю ПБА, запрашиваю спрос и выводы. Google отвечает до минуты.", "info");
 
   try {
     const resp = await fetch("/api/report", {
@@ -426,8 +465,9 @@ $("build").addEventListener("click", async () => {
         sheet: state.sheet,
         keywords: collectKeywords(),
         geo: $("geo").value,
-        use_google: $("use-google").checked,
+        use_google: $("use-google").checked && !$("reuse").value,
         use_ai: $("use-ai").checked,
+        reuse_from: $("reuse").value || null,
       }),
     });
     const data = await resp.json();

@@ -78,14 +78,19 @@ async def save_report(report_id: str, report: dict, html: str) -> bool:
         "source_file": report.get("source_file") or "",
         "size_bytes": len(html.encode("utf-8")),
         "html": html,
+        # Данные по ключевым словам — чтобы пересобрать отчёт, не оплачивая Google заново.
+        "demand": report.get("demand"),
     }
     try:
         async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-            resp = await client.post(
-                f"{url}/rest/v1/{TABLE}",
-                headers=_headers(key, prefer="return=minimal,resolution=merge-duplicates"),
-                json=row,
-            )
+            headers = _headers(key, prefer="return=minimal,resolution=merge-duplicates")
+            resp = await client.post(f"{url}/rest/v1/{TABLE}", headers=headers, json=row)
+            if resp.status_code == 400 and "demand" in resp.text:
+                # В таблице ещё нет колонки demand (её добавляют миграцией из README).
+                # Сохранить отчёт важнее, чем возможность переиспользовать спрос.
+                logger.warning("в таблице нет колонки demand — сохраняю отчёт без неё")
+                row.pop("demand", None)
+                resp = await client.post(f"{url}/rest/v1/{TABLE}", headers=headers, json=row)
         resp.raise_for_status()
         return True
     except httpx.HTTPStatusError as exc:
@@ -123,7 +128,11 @@ async def get_report_html(report_id: str) -> tuple[str, dict] | None:
         resp = await client.get(
             f"{url}/rest/v1/{TABLE}",
             headers=_headers(key),
-            params={"select": f"{LIST_FIELDS},html", "id": f"eq.{report_id}", "limit": "1"},
+            params={
+                "select": f"{LIST_FIELDS},html,demand",
+                "id": f"eq.{report_id}",
+                "limit": "1",
+            },
         )
     resp.raise_for_status()
     rows = resp.json()
@@ -131,6 +140,32 @@ async def get_report_html(report_id: str) -> tuple[str, dict] | None:
         return None
     row = rows[0]
     return row.pop("html", "") or "", row
+
+
+async def get_report_html_safe(report_id: str) -> tuple[str, dict] | None:
+    """То же, но переживает старую схему таблицы без колонки demand."""
+    try:
+        return await get_report_html(report_id)
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 400 and "demand" in exc.response.text:
+            url, key = _config()
+            async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+                resp = await client.get(
+                    f"{url}/rest/v1/{TABLE}",
+                    headers=_headers(key),
+                    params={
+                        "select": f"{LIST_FIELDS},html",
+                        "id": f"eq.{report_id}",
+                        "limit": "1",
+                    },
+                )
+            resp.raise_for_status()
+            rows = resp.json()
+            if not rows:
+                return None
+            row = rows[0]
+            return row.pop("html", "") or "", row
+        raise
 
 
 async def delete_report(report_id: str) -> bool:

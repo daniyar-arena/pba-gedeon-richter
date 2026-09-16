@@ -32,6 +32,7 @@ from app.pba_parser import ParseError, parse_pba_file  # noqa: E402
 from app.report_html import render_report  # noqa: E402
 from app.search_demand import GEO_TARGET_CONSTANTS, fetch_google_demand  # noqa: E402
 from app import security, storage  # noqa: E402
+from app.demand_recover import recover_demand  # noqa: E402
 from app.reports_page import render_reports_page  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -114,6 +115,9 @@ class ReportRequest(BaseModel):
     geo: str = "KZ"
     use_google: bool = True
     use_ai: bool = True
+    # id отчёта, из которого взять готовые данные по ключевым словам вместо нового
+    # платного запроса в Google.
+    reuse_from: str | None = None
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -214,10 +218,66 @@ async def create_report(req: ReportRequest, request: Request) -> JSONResponse:
     return JSONResponse({"job_id": job_id})
 
 
+async def _resolve_reused_demand(report_id: str) -> tuple[dict | None, str]:
+    """Достаёт данные по ключевым словам из прошлого отчёта: сначала из памяти, потом
+    из хранилища, и в последнюю очередь разбирает сохранённую страницу — так работают
+    и отчёты, собранные до появления этой функции."""
+    job = _jobs.get(report_id)
+    report = job.get("report") if job and job.get("status") == "done" else None
+    if report and (report.get("demand") or {}).get("items"):
+        return report["demand"], "из отчёта этого запуска"
+
+    if not storage.configured():
+        return None, "хранилище не настроено"
+
+    try:
+        found = await storage.get_report_html_safe(report_id)
+    except Exception:
+        logger.exception("не удалось прочитать отчёт %s для переиспользования", report_id)
+        return None, "хранилище не ответило"
+    if not found:
+        return None, "отчёт не найден"
+
+    html, meta = found
+    stored_demand = meta.get("demand")
+    if isinstance(stored_demand, dict) and stored_demand.get("items"):
+        return stored_demand, "из сохранённого отчёта"
+
+    recovered = recover_demand(html)
+    if recovered:
+        return recovered, "восстановлены из страницы сохранённого отчёта"
+    return None, "в том отчёте нет блока спроса"
+
+
 async def _run_job(job_id: str, upload: dict, month: dict, req: ReportRequest) -> None:
     try:
         keywords = [k.model_dump() for k in req.keywords]
-        if req.use_google and keywords:
+        reused_demand, reuse_note = (None, "")
+        if req.reuse_from:
+            reused_demand, reuse_note = await _resolve_reused_demand(req.reuse_from)
+
+        if reused_demand:
+            demand = dict(reused_demand)
+            demand["note"] = (
+                f"Данные по ключевым словам взяты из прошлого отчёта ({reuse_note}), "
+                "повторный запрос в Google не делался."
+            )
+            logger.info("job %s: спрос переиспользован (%s)", job_id, reuse_note)
+        elif req.reuse_from:
+            demand = {
+                "source": "Google Keyword Planner (через Apify)",
+                "geo": req.geo.upper(),
+                "available": False,
+                "items": [],
+                "note": (
+                    f"Не удалось взять данные по ключевым словам из прошлого отчёта: "
+                    f"{reuse_note}. Повторный запрос в Google не делался, чтобы не "
+                    "потратить деньги без вашего ведома — соберите отчёт заново с "
+                    "запросом в Google, если данные нужны."
+                ),
+            }
+            logger.warning("job %s: переиспользование не вышло (%s)", job_id, reuse_note)
+        elif req.use_google and keywords:
             demand = await fetch_google_demand(keywords, req.geo, os.getenv("APIFY_API_TOKEN"))
         else:
             demand = {
@@ -330,6 +390,33 @@ def _memory_reports() -> list[dict]:
     return rows
 
 
+@app.get("/api/reports")
+async def reports_json() -> JSONResponse:
+    """Список для выпадашки «взять данные по ключам из прошлого отчёта»."""
+    reports = _memory_reports()
+    if storage.configured():
+        try:
+            known = {r["id"] for r in reports}
+            for row in await storage.list_reports():
+                if row.get("id") not in known:
+                    row["stored"] = True
+                    reports.append(row)
+        except Exception:
+            logger.exception("не удалось получить список отчётов для выпадашки")
+    reports.sort(key=lambda r: r.get("created_at") or "", reverse=True)
+    return JSONResponse(
+        [
+            {
+                "id": r["id"],
+                "brand": r.get("brand"),
+                "month": r.get("month"),
+                "created_at": r.get("created_at"),
+            }
+            for r in reports[:50]
+        ]
+    )
+
+
 @app.get("/reports", response_class=HTMLResponse)
 async def reports_index() -> HTMLResponse:
     reports = _memory_reports()
@@ -370,7 +457,7 @@ async def _stored_report(report_id: str) -> tuple[str, dict]:
     пока хранилище не настроено."""
     if storage.configured():
         try:
-            found = await storage.get_report_html(report_id)
+            found = await storage.get_report_html_safe(report_id)
         except Exception:
             logger.exception("не удалось прочитать отчёт %s из хранилища", report_id)
             found = None
