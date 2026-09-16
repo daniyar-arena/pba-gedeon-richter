@@ -134,8 +134,13 @@ def _groups(items: list[dict]) -> dict:
     конкуренту данных нет, он не превращается в ноль и не завышает нашу долю —
     вместо этого блок помечает, что расчёт неполный.
     """
-    brands = [i for i in items if i["role"] in BRAND_ROLES]
-    category = [i for i in items if i["role"] == "category"]
+    # Порядок в отчёте — по убыванию объёма, ключи без данных в конце: так список
+    # читается как расстановка сил, а не как порядок ввода в форме.
+    def by_volume(bucket: list[dict]) -> list[dict]:
+        return sorted(bucket, key=lambda i: (i["volume"] is None, -(i["volume"] or 0)))
+
+    brands = by_volume([i for i in items if i["role"] in BRAND_ROLES])
+    category = by_volume([i for i in items if i["role"] == "category"])
     ours = next((i for i in brands if i["role"] == "brand" and i["volume"] is not None), None)
 
     brands_measured = [i for i in brands if i["volume"] is not None]
