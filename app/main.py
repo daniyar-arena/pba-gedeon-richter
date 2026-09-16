@@ -84,6 +84,8 @@ _uploads: dict[str, dict] = {}
 _jobs: dict[str, dict] = {}
 # Ссылки на фоновые задачи: без них сборщик мусора может убрать задачу до завершения.
 _tasks: set[asyncio.Task] = set()
+# Данные по ключевым словам, вытащенные из загруженного пользователем отчёта.
+_uploaded_demand: dict[str, dict] = {}
 
 
 def _trim_uploads() -> None:
@@ -190,6 +192,47 @@ async def upload(file: UploadFile = File(...)) -> JSONResponse:
     )
 
 
+@app.post("/api/demand/upload")
+async def upload_demand(file: UploadFile = File(...)) -> JSONResponse:
+    """Принимает ранее скачанный HTML-отчёт и достаёт из него данные по ключевым словам.
+    Нужен, когда прошлый прогон не сохранился на сервере, а платить за Google заново
+    нельзя или не хочется."""
+    if not (file.filename or "").lower().endswith((".html", ".htm")):
+        raise HTTPException(400, "Нужен HTML-файл отчёта — тот, что скачивается кнопкой «Скачать HTML».")
+
+    payload = await file.read()
+    if len(payload) > MAX_UPLOAD_BYTES:
+        raise HTTPException(400, "Файл больше 20 МБ — это не похоже на отчёт.")
+
+    try:
+        html = payload.decode("utf-8")
+    except UnicodeDecodeError:
+        raise HTTPException(400, "Файл не читается как текст — это точно отчёт с сайта?") from None
+
+    demand = recover_demand(html)
+    if not demand:
+        raise HTTPException(
+            400,
+            "В этом файле нет блока спроса по ключевым словам. Нужен отчёт, собранный "
+            "с запросом в Google.",
+        )
+
+    demand_id = f"upload-{uuid.uuid4().hex}"
+    _uploaded_demand[demand_id] = demand
+    while len(_uploaded_demand) > MAX_KEPT_JOBS:
+        _uploaded_demand.pop(next(iter(_uploaded_demand)), None)
+
+    measured = [i for i in demand["items"] if i["volume"] is not None]
+    return JSONResponse(
+        {
+            "demand_id": demand_id,
+            "keywords": len(demand["items"]),
+            "measured": len(measured),
+            "filename": file.filename,
+        }
+    )
+
+
 @app.post("/api/report")
 async def create_report(req: ReportRequest, request: Request) -> JSONResponse:
     client_host = request.client.host if request.client else "unknown"
@@ -222,6 +265,10 @@ async def _resolve_reused_demand(report_id: str) -> tuple[dict | None, str]:
     """Достаёт данные по ключевым словам из прошлого отчёта: сначала из памяти, потом
     из хранилища, и в последнюю очередь разбирает сохранённую страницу — так работают
     и отчёты, собранные до появления этой функции."""
+    uploaded = _uploaded_demand.get(report_id)
+    if uploaded:
+        return uploaded, "из загруженного вами отчёта"
+
     job = _jobs.get(report_id)
     report = job.get("report") if job and job.get("status") == "done" else None
     if report and (report.get("demand") or {}).get("items"):

@@ -192,6 +192,13 @@
       словам возьмём из выбранного отчёта. Список ключей выше в этом случае не используется —
       придут ровно те же ключи, что были в том прогоне.</p>
     <div class="geo-row">
+      <label for="demand-file">…или из скачанного отчёта:</label>
+      <input type="file" id="demand-file" accept=".html,.htm" style="display:inline-block;width:auto">
+    </div>
+    <p class="hint">Пригодится, если прошлый прогон не сохранился на сервере: подойдёт любой
+      HTML-отчёт, скачанный кнопкой «Скачать HTML» — данные по ключам достанутся из него.</p>
+    <div id="demand-file-status"></div>
+    <div class="geo-row">
       <label for="geo">Гео для Google:</label>
       <select id="geo"></select>
     </div>
@@ -436,6 +443,31 @@ async function loadReusable() {
   }
 }
 loadReusable();
+
+$("demand-file").addEventListener("change", async () => {
+  const input = $("demand-file");
+  if (!input.files.length) return;
+  setStatus($("demand-file-status"), "Читаю отчёт…", "info");
+  const form = new FormData();
+  form.append("file", input.files[0]);
+  try {
+    const resp = await fetch("/api/demand/upload", { method: "POST", body: form });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.detail || "не удалось прочитать отчёт");
+    // Подкладываем загруженный источник в тот же список — дальше всё как обычно.
+    const sel = $("reuse");
+    const opt = document.createElement("option");
+    opt.value = data.demand_id;
+    opt.textContent = `из файла: ${data.filename} (${data.measured} из ${data.keywords} ключей с данными)`;
+    sel.appendChild(opt);
+    sel.value = data.demand_id;
+    sel.dispatchEvent(new Event("change"));
+    setStatus($("demand-file-status"),
+      `Взял данные по ${data.keywords} ключевым словам, с объёмами — ${data.measured}.`, "ok");
+  } catch (err) {
+    setStatus($("demand-file-status"), err.message, "err");
+  }
+});
 
 $("reuse").addEventListener("change", () => {
   const reusing = Boolean($("reuse").value);

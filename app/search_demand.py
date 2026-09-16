@@ -100,7 +100,15 @@ async def _fetch_one(client: httpx.AsyncClient, token: str, keyword: str, geo_id
         resp.raise_for_status()
         items = resp.json()
     except httpx.HTTPStatusError as exc:
-        result["error"] = f"Apify ответил HTTP {exc.response.status_code}"
+        if exc.response.status_code == 403:
+            # Бесплатный тариф Apify — $5 в месяц; при исчерпании актор отдаёт 403,
+            # и по коду ошибки это не угадать, поэтому пишем прямым текстом.
+            result["error"] = (
+                "исчерпан месячный лимит Apify (бесплатный тариф $5) — новые запросы "
+                "в Google пойдут после обновления цикла"
+            )
+        else:
+            result["error"] = f"Apify ответил HTTP {exc.response.status_code}"
         logger.warning("apify http %s for %r", exc.response.status_code, keyword)
         return result
     except (httpx.HTTPError, ValueError) as exc:
