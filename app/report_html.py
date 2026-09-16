@@ -459,15 +459,43 @@ def _delta_badge(value, threshold: float = 0.02) -> str:
     return f'<span class="badge {cls}">{pct(value)}</span>'
 
 
-def _month_rows(month: dict) -> tuple[list[dict], dict | None]:
-    """Строки месячной таблицы. Берём блок «тотал» — это месяц глазами медиаплана,
-    ровно та разбивка, которую видит клиент. Если его в файле нет, собираем сами
-    из закрытых недель."""
+def _closed_total(rows: list[dict]) -> dict:
+    """Итоговая строка по отчитанным неделям. KPI по площадкам с разными моделями
+    закупки не складываем — там просмотры, показы и клики вперемешку."""
+    plan = sum(r["budget_plan"] or 0 for r in rows)
+    fact = sum(r["budget_fact"] or 0 for r in rows)
+    return {
+        "kpi_plan": None,
+        "kpi_fact": None,
+        "kpi_pct": None,
+        "budget_plan": plan,
+        "budget_fact": fact,
+        "budget_pct": (fact - plan) / plan if plan else None,
+    }
+
+
+def _month_rows(month: dict) -> tuple[list[dict], dict | None, bool]:
+    """Строки месячной таблицы и признак «база сопоставима».
+
+    Месяц отчитан целиком — берём блок «тотал»: это месяц глазами медиаплана, ровно та
+    разбивка, которую видит клиент, и проценты там честные.
+
+    Месяц отчитан частично — «тотал» не годится: план в нём на весь месяц, а факт только
+    по отчитанным неделям, и процент показывал бы провал, которого нет. Тогда собираем
+    таблицу по отчитанным неделям, где план и факт взяты за один и тот же период, —
+    проценты снова осмысленные.
+    """
     block = month.get("month_total")
-    if block and block["rows"]:
+    if not month["pending_week_numbers"] and block and block["rows"]:
         rows = sorted(block["rows"], key=lambda r: -(r["budget_plan"] or 0))
-        return rows, block["total"]
-    return month["by_placement_closed"], None
+        return rows, block["total"], True
+
+    rows = month["by_placement_closed"]
+    if rows:
+        return rows, _closed_total(rows), False
+    if block and block["rows"]:
+        return sorted(block["rows"], key=lambda r: -(r["budget_plan"] or 0)), block["total"], False
+    return [], None, False
 
 
 def _budget_bars(rows: list[dict], total_fact: float, show_pct: bool) -> str:
@@ -522,24 +550,37 @@ def _budget_bars(rows: list[dict], total_fact: float, show_pct: bool) -> str:
     return legend + f'<div class="bars">{"".join(lines)}</div>'
 
 
-def _month_table(rows: list[dict], total: dict | None, show_pct: bool) -> str:
-    """Полная таблица месяца: план, факт и отклонение по KPI, бюджету и цене единицы."""
+def _buy_models(rows: list[dict]) -> set[str]:
+    """Семейства моделей закупки в наборе строк: CPM, CPV, CPC, CPD…"""
+    models = set()
+    for r in rows:
+        model = (r.get("buy_model") or "").upper()
+        for family in ("CPM", "CPV", "CPC", "CPL", "CPD"):
+            if family in model:
+                models.add(family)
+    return models
+
+
+def _month_table(rows: list[dict], total: dict | None, total_fact: float) -> str:
+    """Полная таблица месяца: план, факт, отклонение и доля бюджета."""
 
     def cells(r: dict) -> str:
         kpi = (
             f'<td class="num">{num(r["kpi_plan"])}</td>'
             f'<td class="num">{num(r["kpi_fact"])}</td>'
-            f'<td class="num">{_delta_badge(r["kpi_pct"]) if show_pct else "—"}</td>'
+            f'<td class="num">{_delta_badge(r["kpi_pct"])}</td>'
         )
+        share = (r["budget_fact"] or 0) / total_fact if total_fact else None
         budget = (
             f'<td class="num">{money(r["budget_plan"])}</td>'
             f'<td class="num">{money(r["budget_fact"])}</td>'
-            f'<td class="num">{_delta_badge(r["budget_pct"]) if show_pct else "—"}</td>'
+            f'<td class="num">{_delta_badge(r["budget_pct"])}</td>'
+            f'<td class="num muted">{f"{share * 100:.0f}%" if share else "—"}</td>'
         )
         unit = (
             f'<td class="num">{num(r.get("unit_cost_plan"), 2)}</td>'
             f'<td class="num">{num(r.get("unit_cost_fact"), 2)}</td>'
-            f'<td class="num">{_delta_badge(r.get("unit_cost_pct")) if show_pct else "—"}</td>'
+            f'<td class="num">{_delta_badge(r.get("unit_cost_pct"))}</td>'
         )
         return kpi + budget + unit
 
@@ -553,15 +594,25 @@ def _month_table(rows: list[dict], total: dict | None, show_pct: bool) -> str:
             f"{cells(r)}</tr>"
         )
 
+    # KPI в итоге складываем только если все строки куплены по одной модели: иначе
+    # в одном числе оказались бы просмотры, показы, клики и дни размещения.
+    mixed_models = len(_buy_models(rows)) > 1
     if total:
-        total_row = (
-            '<tr class="total-row"><td colspan="2">Всего за месяц</td>'
-            f'<td class="num">{num(total["kpi_plan"])}</td>'
+        kpi_cells = (
+            '<td class="num muted">—</td><td class="num muted">—</td>'
+            '<td class="num muted">—</td>'
+            if mixed_models
+            else f'<td class="num">{num(total["kpi_plan"])}</td>'
             f'<td class="num">{num(total["kpi_fact"])}</td>'
-            f'<td class="num">{_delta_badge(total["kpi_pct"]) if show_pct else "—"}</td>'
+            f'<td class="num">{_delta_badge(total["kpi_pct"])}</td>'
+        )
+        total_row = (
+            '<tr class="total-row"><td colspan="2">Всего</td>'
+            f"{kpi_cells}"
             f'<td class="num">{money(total["budget_plan"])}</td>'
             f'<td class="num">{money(total["budget_fact"])}</td>'
-            f'<td class="num">{_delta_badge(total["budget_pct"]) if show_pct else "—"}</td>'
+            f'<td class="num">{_delta_badge(total["budget_pct"])}</td>'
+            '<td class="num muted">100%</td>'
             '<td class="num muted">—</td><td class="num muted">—</td>'
             '<td class="num muted">—</td></tr>'
         )
@@ -571,16 +622,24 @@ def _month_table(rows: list[dict], total: dict | None, show_pct: bool) -> str:
     head = (
         "<thead>"
         '<tr><th rowspan="2">Площадка</th><th rowspan="2">Закупка</th>'
-        '<th colspan="3">KPI</th><th colspan="3">Бюджет с НДС и АК</th>'
+        '<th colspan="3">KPI</th><th colspan="4">Бюджет с НДС и АК</th>'
         '<th colspan="3">Цена единицы</th></tr>'
         '<tr><th class="num">план</th><th class="num">факт</th><th class="num">%</th>'
         '<th class="num">план</th><th class="num">факт</th><th class="num">%</th>'
+        '<th class="num">доля</th>'
         '<th class="num">план</th><th class="num">факт</th><th class="num">%</th></tr>'
         "</thead>"
     )
+    note = (
+        '<p class="footer-note">В строке «Всего» KPI не суммируется: площадки куплены по '
+        "разным моделям (" + ", ".join(sorted(_buy_models(rows))) + "), а просмотры, показы, "
+        "клики и дни размещения — разные единицы. Бюджет суммируется, он в тенге.</p>"
+        if mixed_models
+        else ""
+    )
     return (
         '<div class="table-wrap"><table class="compact">'
-        f'{head}<tbody>{"".join(body)}{total_row}</tbody></table></div>'
+        f'{head}<tbody>{"".join(body)}{total_row}</tbody></table></div>{note}'
     )
 
 
@@ -590,11 +649,9 @@ def render_pba(month: dict) -> str:
     closed = ", ".join(str(n) for n in month["closed_week_numbers"]) or "нет"
     pending_labels = ", ".join(str(n) for n in pending) or "нет"
 
-    # Процент показываем только когда месяц отчитан целиком: в блоке «тотал» план стоит
-    # на весь месяц, а факт приходит по отчитанным неделям, и на неполном месяце
-    # отклонение читалось бы как недоосвоение, которого нет.
-    show_pct = not pending
-    rows, total = _month_rows(month)
+    # Проценты показываем всегда, но на сопоставимой базе: для неполного месяца таблица
+    # строится по отчитанным неделям, где план и факт взяты за один период.
+    rows, total, full_month = _month_rows(month)
 
     delivery = s["delivery_pct"]
     delivery_class = (
@@ -605,10 +662,10 @@ def render_pba(month: dict) -> str:
         callout = (
             f"Месяц отчитан частично: факт есть по неделям <strong>{esc(closed)}</strong>, "
             f"недели <strong>{esc(pending_labels)}</strong> ещё не отчитаны. "
-            "Поэтому в таблице показаны план на весь месяц и факт по отчитанным неделям, "
-            "а проценты отклонения не выводятся — на неполном факте они читались бы "
-            "как недоосвоение, которого нет. Реальный темп — в плитке «выполнение "
-            "по закрытым неделям»."
+            "Таблица ниже — <strong>по отчитанным неделям</strong>: и план, и факт взяты "
+            "за один и тот же период, поэтому проценты в ней настоящие. Сравнивать факт "
+            "с планом на весь месяц нельзя — вышло бы недоосвоение, которого нет; "
+            "общий план месяца показан отдельной плиткой."
         )
     else:
         callout = (
@@ -643,13 +700,13 @@ def render_pba(month: dict) -> str:
       <div class="stats-row">{"".join(tiles)}</div>
 
       <div class="sub-head">Бюджет по площадкам</div>
-      {_budget_bars(rows, total_fact, show_pct)}
+      {_budget_bars(rows, total_fact, True)}
 
-      <div class="sub-head">Полная таблица месяца</div>
+      <div class="sub-head">{"Полная таблица месяца" if full_month else "Полная таблица по отчитанным неделям"}</div>
       <p class="muted small">KPI считается в единицах своей модели закупки: CPV — просмотры,
       CPM — показы, CPC — клики. Цена единицы — бюджет с НДС и АК на 1000 показов (CPM)
       или на просмотр либо клик (CPV, CPC).</p>
-      {_month_table(rows, total, show_pct)}
+      {_month_table(rows, total, total_fact)}
     </section>'''
 
 

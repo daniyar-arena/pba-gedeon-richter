@@ -200,7 +200,8 @@ def _unit_cost(buy_model: str, budget: float | None, kpi: float | None) -> float
     model = (buy_model or "").upper()
     if "CPM" in model:
         return budget / kpi * 1000
-    if "CPV" in model or "CPC" in model or "CPL" in model:
+    if "CPV" in model or "CPC" in model or "CPL" in model or "CPD" in model:
+        # CPD — цена за день размещения, делится так же, как клик или просмотр.
         return budget / kpi
     return None
 
